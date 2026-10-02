@@ -1,0 +1,21 @@
+# FastAPI & Server
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+pydantic>=2.0.0
+python-multipart>=0.0.9
+
+# Image Processing (Headless for Serverless Linux)
+opencv-python-headless>=4.9.0
+numpy>=1.26.0
+pillow>=10.0.0
+
+# Geometry & Polygon calculation
+shapely>=2.0.0
+pyclipper>=1.3.0
+
+# Deep Learning Inference & OCR
+onnxruntime>=1.17.0
+rapidocr-onnxruntime>=1.3.14
+
+# HTTP Client (Health & Test)
+httpx>=0.27.0
