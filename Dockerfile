@@ -6,7 +6,7 @@ FROM python:3.11-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PORT=9000 \
+    PORT=8000 \
     HOME=/tmp
 
 WORKDIR /app
@@ -35,5 +35,5 @@ RUN chmod -R 755 /app && \
 EXPOSE 9000
 EXPOSE 8000
 
-# 6. 启动服务：自适应读取 PORT (阿里云 FC 默认监听 9000 端口)
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-9000} --workers 1"]
+# 6. 启动服务：自适应读取 PORT (默认监听 8000 端口)
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"]
