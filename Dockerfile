@@ -21,11 +21,12 @@ RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debia
     && rm -rf /var/lib/apt/lists/*
 
 # 2. 预先安装 Python 依赖库 (使用阿里云官方镜像源秒级高速下载)
-# 强制锁定 opencv-python-headless，移除第三方包自动引入的带 GUI 的 opencv-python
+# 彻底清理 opencv 冲突并强制重装纯净的 opencv-python-headless，且在打包期严格自检
 COPY requirements.txt .
 RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com -r requirements.txt && \
-    pip uninstall -y opencv-python && \
-    pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com "opencv-python-headless>=4.9.0"
+    pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && \
+    pip install --no-cache-dir --force-reinstall -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com "opencv-python-headless>=4.9.0" && \
+    python -c "import cv2; from rapidocr_onnxruntime import RapidOCR; print('=== OPENCV & RAPIDOCR VERIFIED ===', cv2.__version__)"
 
 # 3. 复制模型权重与应用代码
 COPY models/ ./models/
