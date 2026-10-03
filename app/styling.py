@@ -46,10 +46,9 @@ def extract_colors_fast(image: np.ndarray, bbox: tuple) -> Tuple[str, str]:
                 interpolation=cv2.INTER_AREA
             )
         pixels = crop_img.reshape((-1, 3)).astype(np.float32)
-        init_c = np.array([[0, 0, 0], [255, 255, 255]], dtype=np.float32)
         criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 8, 1.0)
         _, labels, centers = cv2.kmeans(
-            pixels, 2, None, criteria, 1, cv2.KMEANS_USE_INITIAL_CENTERS, init_c
+            pixels, 2, None, criteria, 1, cv2.KMEANS_PP_CENTERS
         )
         return labels, centers, pixels
 
@@ -82,7 +81,8 @@ def extract_colors_fast(image: np.ndarray, bbox: tuple) -> Tuple[str, str]:
         bg_hex = f"#{int(bg_color[2]):02x}{int(bg_color[1]):02x}{int(bg_color[0]):02x}"
         text_hex = f"#{int(text_color[2]):02x}{int(text_color[1]):02x}{int(text_color[0]):02x}"
         return bg_hex, text_hex
-    except Exception:
+    except Exception as e:
+        print(f"[Styling] 色彩提取异常: {e}")
         return "#FFFFFF", "#000000"
 
 
