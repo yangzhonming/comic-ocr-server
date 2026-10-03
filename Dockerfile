@@ -11,29 +11,25 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# 1. 配置阿里云官方 Debian 镜像源并安装基础动态链接库 (解决 libxcb/libgl 缺失)
+# 1. 配置阿里云官方 Debian 镜像源并安装基础依赖 (libglib2.0)
 RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true && \
     apt-get update && apt-get install -y --no-install-recommends \
-    libgl1 \
     libglib2.0-0 \
-    libxcb1 \
-    libx11-xcb1 \
     && rm -rf /var/lib/apt/lists/*
 
 # 2. 预先安装 Python 依赖库 (使用阿里云官方镜像源秒级高速下载)
-# 彻底清理 opencv 冲突并强制重装纯净的 opencv-python-headless，且在打包期严格自检
+# 采用 --no-deps 安装 rapidocr-onnxruntime，彻底杜绝带 GUI 的 opencv-python 被误拉取
 COPY requirements.txt .
 RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com -r requirements.txt && \
-    pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && \
-    pip install --no-cache-dir --force-reinstall -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com "opencv-python-headless>=4.9.0" && \
-    python -c "import cv2; from rapidocr_onnxruntime import RapidOCR; print('=== OPENCV & RAPIDOCR VERIFIED ===', cv2.__version__)"
+    pip install --no-cache-dir --no-deps -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com "rapidocr-onnxruntime>=1.3.14"
 
 # 3. 复制模型权重与应用代码
 COPY models/ ./models/
 COPY app/ ./app/
 
-# 4. 权限安全适配：确保全目录只读执行权限
-RUN chmod -R 755 /app
+# 4. 权限安全适配与构建期完整自检验证
+RUN chmod -R 755 /app && \
+    python -c "import cv2; from rapidocr_onnxruntime import RapidOCR; from app.main import app; print('=== BUILD VERIFIED 100%: ALL MODULES LOADED SUCCESSFULLY ===')"
 
 # 5. 暴露端口 (阿里云 FC 3.0 默认 9000，同时兼容 8000)
 EXPOSE 9000
