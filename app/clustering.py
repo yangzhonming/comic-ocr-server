@@ -18,8 +18,13 @@ def classify_bubble_role(
 ) -> Tuple[str, bool]:
     """
     分层短路物理特征决策树 (Short-Circuit Physical Decision Tree):
-    判断文本块属于对白(dialogue)、画外音(narration) 还是 拟声词幽灵框(sfx_ghost)
-    单框计算耗时 < 0.2ms，跨语言通用，不依赖特定语种词典。
+    精准区分正规对白气泡(dialogue)、画外音(narration)与拟声词幽灵框(sfx_ghost)。
+    核心判据：
+    1. 4-角块自适应方差与背景色一致性 (彻底根除由于标点符号/边缘紧贴导致的整圈方差失真)
+    2. 气泡底色物理特征 (白底黑字、黑底白字心理话、淡彩浅色气泡)
+    3. 前景与背景高对比度判定
+    4. 彻底废除按字数 >= 6 强行归类为旁白以及 <= 2 强行归类为拟声词的古板规则
+    单框计算耗时 < 0.2ms，跨语言通用。
     返回: (role, is_ghost)
     """
     if image is None:
@@ -27,67 +32,93 @@ def classify_bubble_role(
 
     h_img, w_img = image.shape[:2]
     bx, by, bw, bh = bubble_box
+    clean_text = text.replace('\n', '').strip()
+
+    def _hex_to_lum_sat(hex_str: str) -> Tuple[float, float]:
+        c = hex_str.lstrip('#')
+        if len(c) != 6:
+            return 255.0, 0.0
+        r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+        lum = 0.299 * r + 0.587 * g + 0.114 * b
+        sat = float(max(r, g, b) - min(r, g, b))
+        return lum, sat
+
+    bg_lum, bg_sat = _hex_to_lum_sat(bg_hex)
+    fg_lum, fg_sat = _hex_to_lum_sat(fg_hex)
+    contrast = abs(bg_lum - fg_lum)
+
+    # 采样 4 个外围角落 (采用角落采样替代连续边缘条采样，彻底避免文本尾部标点符号或紧凑框边缘碰笔画导致方差失真)
     pad = 6
     ox1, oy1 = max(0, bx - pad), max(0, by - pad)
     ox2, oy2 = min(w_img, bx + bw + pad), min(h_img, by + bh + pad)
     outer_crop = image[oy1:oy2, ox1:ox2]
 
-    margin_var = 100.0
-    if outer_crop.shape[0] >= 2 * pad and outer_crop.shape[1] >= 2 * pad:
-        top_strip = outer_crop[0:pad, :]
-        bot_strip = outer_crop[-pad:, :]
-        left_strip = outer_crop[:, 0:pad]
-        right_strip = outer_crop[:, -pad:]
-        margin_pixels = np.concatenate([
-            top_strip.reshape(-1, 3),
-            bot_strip.reshape(-1, 3),
-            left_strip.reshape(-1, 3),
-            right_strip.reshape(-1, 3)
-        ])
-        gray_margin = cv2.cvtColor(margin_pixels.reshape(-1, 1, 3), cv2.COLOR_BGR2GRAY).flatten()
-        margin_var = float(np.var(gray_margin))
-    elif outer_crop.size > 0:
-        ch, cw = outer_crop.shape[:2]
-        k = max(1, min(3, ch, cw))
-        corners = [
-            outer_crop[0:k, 0:k],
-            outer_crop[0:k, -k:],
-            outer_crop[-k:, 0:k],
-            outer_crop[-k:, -k:],
-        ]
-        vars_c = [float(np.var(cv2.cvtColor(c, cv2.COLOR_BGR2GRAY))) for c in corners if c.size > 0]
-        margin_var = min(vars_c) if vars_c else 100.0
+    ch, cw = outer_crop.shape[:2]
+    k = max(2, min(6, ch // 2, cw // 2)) if (ch >= 4 and cw >= 4) else 1
+    corners = [
+        outer_crop[0:k, 0:k],
+        outer_crop[0:k, -k:],
+        outer_crop[-k:, 0:k],
+        outer_crop[-k:, -k:],
+    ]
+    cvars = [float(np.var(cv2.cvtColor(c, cv2.COLOR_BGR2GRAY))) for c in corners if c.size > 0]
+    cmeans = [float(np.mean(cv2.cvtColor(c, cv2.COLOR_BGR2GRAY))) for c in corners if c.size > 0]
+
+    # 平整角块判定 (方差 <= 40 说明是平滑纯色)
+    flat_corners = [i for i, v in enumerate(cvars) if v <= 40.0]
+    # 角块灰度与采样背景色一致性 (差值 <= 45 说明与气泡底色属于同一种纯净底色)
+    matching_flat_corners = [i for i in flat_corners if abs(cmeans[i] - bg_lum) <= 45.0]
+    num_matching_flat = len(matching_flat_corners)
+
+    # 气泡底色特征 (白底黑字、黑底白字心理话、浅色/淡彩气泡)
+    is_light_bubble = (bg_lum >= 150.0 and bg_sat <= 45.0)
+    is_dark_bubble = (bg_lum <= 95.0 and bg_sat <= 35.0)
+    is_pastel_bubble = (bg_lum >= 160.0 and bg_sat <= 70.0)
+    is_speech_bubble_color = (is_light_bubble or is_dark_bubble or is_pastel_bubble)
 
     # 移动端 390 宽度的 8.5% 标尺换算切片标准行高
     h_std = w_img * 0.085
     height_ratio = avg_line_h / max(1.0, h_std)
 
-    # Layer 1: 【一票肯定权】气泡浸润度检测 (外扩环形留白平整 -> 必定浸泡在纯色气泡中)
-    if (lines_count >= 2 and margin_var < 55.0) or (margin_var < 35.0):
-        return "dialogue", False
+    # Layer 1: 【一票肯定权】标准对白气泡判定 (Bubble Immersion)
+    # 只要符合气泡底色特征且图文有良好对比度:
+    if is_speech_bubble_color and contrast >= 35.0:
+        # 1. 至少 2 个角落平整纯净并与底色一致 -> 绝大多数正规气泡
+        if num_matching_flat >= 2:
+            return "dialogue", False
+        # 2. 至少 1 个角落平整且是多行或多字对白 -> 异形/椭圆紧凑对白气泡
+        if num_matching_flat >= 1 and (lines_count >= 2 or len(clean_text) >= 4):
+            return "dialogue", False
+        # 3. 极高明度纯白背景 (底色 >= 220 纯白画布) 且有多字文本 -> 必定为对话气泡
+        if bg_lum >= 220.0 and bg_sat <= 25.0 and (lines_count >= 2 or len(clean_text) >= 3):
+            return "dialogue", False
 
-    # Layer 2: 【一票否决权】极端尺度与空心度检测
-    if height_ratio > 2.2 or height_ratio < 0.45 or avg_fill_ratio < 0.13 or avg_fill_ratio > 0.55:
+    # Layer 2: 【一票否决权】拟声词/环境字检测 (SFX Ghost)
+    # 1. 高饱和彩色字体 (漫画中鲜艳彩字几乎都是拟声词/环境字)
+    if fg_sat >= 45.0:
         return "sfx_ghost", True
 
-    # Layer 3: 【综合裁决层】色彩中性度与长宽比 (画外音 vs 拟声词/环境字)
-    def _color_diff(hex_str: str) -> float:
-        c = hex_str.lstrip('#')
-        if len(c) != 6:
-            return 0.0
-        r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
-        return float(max(r, g, b) - min(r, g, b))
+    # 2. 极端尺度 (超大招式字/音效字，或无平滑底色的过小杂字)
+    if (height_ratio > 2.2 or height_ratio < 0.40) and num_matching_flat == 0:
+        return "sfx_ghost", True
 
-    fg_sat = _color_diff(fg_hex)
-    aspect_ratio = bw / max(1.0, float(bh))
-    clean_text = text.replace('\n', '').strip()
+    # 3. 空心字/畸变笔画
+    if (avg_fill_ratio < 0.12 or avg_fill_ratio > 0.58) and not is_speech_bubble_color:
+        return "sfx_ghost", True
 
-    # 画外音/旁白: 色彩中性(非高饱和彩字)，呈长矩形或完整长句
-    if fg_sat <= 35.0 and (aspect_ratio >= 3.2 or len(clean_text) >= 6):
+    # 4. 背景杂乱 (无任何平滑纯色角落，说明直接绘制在插画/画面上)
+    if num_matching_flat == 0 and cvars and min(cvars) > 80.0:
+        # 短词/拟声词直接进入幽灵框
+        if len(clean_text) <= 4:
+            return "sfx_ghost", True
+        # 复杂画面上的中性长句 -> 画外音/旁白 (保全原画)
         return "narration", False
 
-    # 孤立单双字叹词/杂音 (如 '헐', '쾅')
-    if len(clean_text) <= 2 or margin_var > 75.0:
+    # Layer 3: 【兜底裁决】
+    if is_speech_bubble_color:
+        return "dialogue", False
+
+    if len(clean_text) <= 3:
         return "sfx_ghost", True
 
     return "dialogue", False

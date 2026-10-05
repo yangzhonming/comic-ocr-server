@@ -71,6 +71,43 @@ def merge_horizontal_boxes(
     return cur
 
 
+def suppress_contained_boxes(
+    boxes: List[List[int]],
+    containment_thresh: float = 0.75
+) -> List[List[int]]:
+    """
+    内部嵌套冗余碎框抑制算法:
+    当 DBNet 对包含省略号 '...' 或细碎符号的整行对白同时检出大框和内部微小碎框时，
+    若小框面积的大部分 (>= 75%) 都被大框包含，则剔除小框，避免产生 'ㅁ2' 等垃圾碎片。
+    """
+    if len(boxes) <= 1:
+        return boxes
+
+    sorted_boxes = sorted(boxes, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]), reverse=True)
+    kept = []
+    for b in sorted_boxes:
+        bx1, by1, bx2, by2 = b
+        area_b = (bx2 - bx1) * (by2 - by1)
+        if area_b <= 0:
+            continue
+        is_contained = False
+        for k in kept:
+            kx1, ky1, kx2, ky2 = k
+            area_k = (kx2 - kx1) * (ky2 - ky1)
+            ix1 = max(bx1, kx1)
+            iy1 = max(by1, ky1)
+            ix2 = min(bx2, kx2)
+            iy2 = min(by2, ky2)
+            if ix2 > ix1 and iy2 > iy1:
+                inter = (ix2 - ix1) * (iy2 - iy1)
+                if (inter / area_b) >= containment_thresh and area_k > area_b * 1.3:
+                    is_contained = True
+                    break
+        if not is_contained:
+            kept.append(b)
+    return kept
+
+
 class OcrEngineManager:
     """
     OCR 模型管理器与推理引擎 (CPU 极致优化版)
@@ -215,8 +252,11 @@ class OcrEngineManager:
 
             raw_boxes.append([bx1, by1, bx2, by2])
 
+        # 内部嵌套冗余碎框滤除 (避免大框内部细碎标点/噪点产生冗余框)
+        dedup_boxes = suppress_contained_boxes(raw_boxes, containment_thresh=0.75)
+
         # 前置同行碎框水平融合
-        fused_boxes = merge_horizontal_boxes(raw_boxes, y_overlap_ratio=0.50, max_gap_ratio=1.5, max_h_diff=1.8)
+        fused_boxes = merge_horizontal_boxes(dedup_boxes, y_overlap_ratio=0.50, max_gap_ratio=1.5, max_h_diff=1.8)
 
         # 2. 从未经下采样模糊的原图上高保真裁切 (+2px padding)
         crops = []

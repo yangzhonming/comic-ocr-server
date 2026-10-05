@@ -23,6 +23,7 @@ class BubbleItem(BaseModel):
     bg: str = Field("#FFFFFF", description="气泡真实采样背景底色十六进制，直接用于遮罩 background-color")
     fg: str = Field("#000000", description="文本真实采样前景色十六进制，直接用于 color")
     size: int = Field(16, description="预估单字像素高度，直接用于 font-size")
+    weight: int = Field(700, description="预估单字字重，直接用于 font-weight")
     score: float = Field(1.0, description="OCR 识别平均置信度 (0.0 ~ 1.0)")
     role: str = Field(
         "dialogue",
