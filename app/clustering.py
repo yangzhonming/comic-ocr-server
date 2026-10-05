@@ -87,7 +87,7 @@ def classify_bubble_role(
         return "narration", False
 
     # 孤立单双字叹词/杂音 (如 '헐', '쾅')
-    if len(clean_text) <= 2 or outer_var > 75.0:
+    if len(clean_text) <= 2 or margin_var > 75.0:
         return "sfx_ghost", True
 
     return "dialogue", False
