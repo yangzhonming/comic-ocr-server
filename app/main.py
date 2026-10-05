@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 import cv2
 import numpy as np
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile, status
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, status, Body
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.engine import engine_manager
@@ -119,3 +119,10 @@ async def process_slice_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"OCR 处理异常: {str(e)}"
         )
+
+
+@app.post("/coordinates", summary="长漫章节全局坐标系接收与同步")
+async def receive_coordinates(data: Optional[dict] = Body(default=None)):
+    """接收前端上报的整话长卷画布尺寸与原图分布"""
+    return {"code": 0, "message": "coordinates registered"}
+

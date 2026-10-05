@@ -23,8 +23,15 @@ class BubbleItem(BaseModel):
     bg: str = Field("#FFFFFF", description="气泡真实采样背景底色十六进制，直接用于遮罩 background-color")
     fg: str = Field("#000000", description="文本真实采样前景色十六进制，直接用于 color")
     size: int = Field(16, description="预估单字像素高度，直接用于 font-size")
-    weight: int = Field(400, description="字重估计 (400 常规, 700 加粗)，直接用于 font-weight")
     score: float = Field(1.0, description="OCR 识别平均置信度 (0.0 ~ 1.0)")
+    role: str = Field(
+        "dialogue",
+        description="文本角色类型: dialogue(正规对白气泡), narration(画外音/旁白), sfx_ghost(拟声词幽灵框)"
+    )
+    is_ghost: bool = Field(
+        False,
+        description="是否为幽灵框 (true时前端默认不上屏盖白块，翻译时不占用Token，支持按需点读)"
+    )
 
 
 class SliceResponse(BaseModel):

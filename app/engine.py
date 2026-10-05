@@ -10,6 +10,67 @@ from app.styling import extract_colors_fast, compute_fill_ratio
 from app.clustering import TextLineItem, cluster_text_lines
 
 
+def merge_horizontal_boxes(
+    boxes: List[List[int]],
+    y_overlap_ratio: float = 0.50,
+    max_gap_ratio: float = 1.5,
+    max_h_diff: float = 1.8
+) -> List[List[int]]:
+    """
+    同行碎框前置水平融合算法:
+    检测网络 (DBNet) 对字符间距大、笔画细 (如韩文 '우 으...') 的文字行可能会断裂为多个碎框。
+    在裁切前将满足以下条件的同行碎框合并:
+    1. Y 轴重合比例 >= 50%
+    2. 水平间隙 <= 1.5 倍平均字高
+    3. 两者字高差异 <= 1.8 倍 (杜绝把大字或背景杂线吃进来)
+    融合后可一次性完整裁切送入 REC，避免字符被暴力切断、提升上下文识别率，并天然消除多余换行。
+    """
+    if len(boxes) <= 1:
+        return boxes
+
+    cur = [list(b) for b in boxes]
+    merged = True
+    while merged:
+        merged = False
+        n = len(cur)
+        for i in range(n):
+            if cur[i] is None:
+                continue
+            for j in range(i + 1, n):
+                if cur[j] is None:
+                    continue
+                a, b = cur[i], cur[j]
+                ha = a[3] - a[1]
+                hb = b[3] - b[1]
+                if ha <= 0 or hb <= 0:
+                    continue
+
+                if max(ha, hb) > min(ha, hb) * max_h_diff:
+                    continue
+
+                y_top = max(a[1], b[1])
+                y_bot = min(a[3], b[3])
+                overlap = max(0, y_bot - y_top)
+                min_h = min(ha, hb)
+                if (overlap / min_h) < y_overlap_ratio:
+                    continue
+
+                x_gap = max(0, max(a[0], b[0]) - min(a[2], b[2]))
+                avg_h = (ha + hb) / 2.0
+                if x_gap > avg_h * max_gap_ratio:
+                    continue
+
+                cur[i] = [min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3])]
+                cur[j] = None
+                merged = True
+                break
+            if merged:
+                break
+        cur = [b for b in cur if b is not None]
+
+    return cur
+
+
 class OcrEngineManager:
     """
     OCR 模型管理器与推理引擎 (CPU 极致优化版)
@@ -134,20 +195,41 @@ class OcrEngineManager:
         if det_boxes is None or len(det_boxes) == 0:
             return []
 
+        # 提取水平对齐包围盒 [bx1, by1, bx2, by2] 并执行 DET 尺寸与噪点硬过滤
+        raw_boxes = []
+        for b in det_boxes:
+            xs = [p[0] for p in b]
+            ys = [p[1] for p in b]
+            bx1 = max(0, int(round(min(xs))))
+            by1 = max(0, int(round(min(ys))))
+            bx2 = min(orig_w, int(round(max(xs))))
+            by2 = min(orig_h, int(round(max(ys))))
+            bw = bx2 - bx1
+            bh = by2 - by1
+
+            # DET 硬过滤: 滤除过小噪点斑块及极端畸变线条 (杜绝背景噪点被误识为 'o', '口', '0')
+            if (bw < 12 and bh < 12) or (bw * bh < 150):
+                continue
+            if (bw / max(1, bh) > 15.0) or (bh / max(1, bw) > 15.0):
+                continue
+
+            raw_boxes.append([bx1, by1, bx2, by2])
+
+        # 前置同行碎框水平融合
+        fused_boxes = merge_horizontal_boxes(raw_boxes, y_overlap_ratio=0.50, max_gap_ratio=1.5, max_h_diff=1.8)
+
         # 2. 从未经下采样模糊的原图上高保真裁切 (+2px padding)
         crops = []
         box_coords = []
         pad = 2
-        for b in det_boxes:
-            xs = [p[0] for p in b]
-            ys = [p[1] for p in b]
-            bx1 = max(0, int(round(min(xs))) - pad)
-            by1 = max(0, int(round(min(ys))) - pad)
-            bx2 = min(orig_w, int(round(max(xs))) + pad)
-            by2 = min(orig_h, int(round(max(ys))) + pad)
-            if (bx2 - bx1) >= 5 and (by2 - by1) >= 5:
-                crops.append(image[by1:by2, bx1:bx2])
-                box_coords.append([bx1, by1, bx2, by2])
+        for bx1, by1, bx2, by2 in fused_boxes:
+            cbx1 = max(0, bx1 - pad)
+            cby1 = max(0, by1 - pad)
+            cbx2 = min(orig_w, bx2 + pad)
+            cby2 = min(orig_h, by2 + pad)
+            if (cbx2 - cbx1) >= 5 and (cby2 - cby1) >= 5:
+                crops.append(image[cby1:cby2, cbx1:cbx2])
+                box_coords.append([cbx1, cby1, cbx2, cby2])
 
         if not crops:
             return []
@@ -166,8 +248,8 @@ class OcrEngineManager:
             fr = compute_fill_ratio(image, tuple(bbox))
             text_line_items.append(TextLineItem(bbox, text, score, bg_hex, text_hex, fr))
 
-        # 5. BFS 连通图聚类合并气泡
-        bubbles = cluster_text_lines(text_line_items, start_y=start_y)
+        # 5. BFS 连通图聚类合并气泡并执行物理决策打标
+        bubbles = cluster_text_lines(text_line_items, image=image, start_y=start_y)
         return bubbles
 
 

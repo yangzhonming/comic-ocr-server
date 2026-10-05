@@ -52,14 +52,6 @@ def extract_colors_fast(image: np.ndarray, bbox: tuple) -> Tuple[str, str]:
         )
         return labels, centers, pixels
 
-    def _pick_text(labels: np.ndarray, centers: np.ndarray, pixels: np.ndarray) -> np.ndarray:
-        gray = cv2.cvtColor(pixels.reshape((-1, 1, 3)).astype(np.uint8), cv2.COLOR_BGR2GRAY).reshape(-1)
-        _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-        flat = labels.flatten()
-        c0 = np.sum((flat == 0) & (otsu == 255))
-        c1 = np.sum((flat == 1) & (otsu == 255))
-        return centers[0].astype(np.uint8) if c0 > c1 else centers[1].astype(np.uint8)
-
     def _sample_bg_corner(crop_img: np.ndarray) -> np.ndarray:
         ch, cw = crop_img.shape[:2]
         if ch < 6 or cw < 6:
@@ -75,9 +67,24 @@ def extract_colors_fast(image: np.ndarray, bbox: tuple) -> Tuple[str, str]:
         return np.median(best, axis=(0, 1)).astype(np.uint8)
 
     try:
-        labels_t, centers_t, pixels_t = _kmeans_two(tc_crop)
-        text_color = _pick_text(labels_t, centers_t, pixels_t)
+        # 1. 采样背景基准色 (4 角落方差最小块，优先排除笔画干扰)
         bg_color = _sample_bg_corner(bg_crop)
+
+        # 2. 对文字核心区进行 2-中心 KMeans 聚类提取两簇
+        labels_t, centers_t, pixels_t = _kmeans_two(tc_crop)
+
+        # 3. 选出与背景色欧氏距离最远的一簇作为文字前景色 (彻底解决黑底白字被误判为黑字的问题)
+        bg_f32 = bg_color.astype(np.float32)
+        dist0 = float(np.linalg.norm(centers_t[0] - bg_f32))
+        dist1 = float(np.linalg.norm(centers_t[1] - bg_f32))
+        text_color = centers_t[0].astype(np.uint8) if dist0 > dist1 else centers_t[1].astype(np.uint8)
+
+        # 4. 对比度防护机制 (WCAG 感知亮度差值保底，杜绝深底暗字或浅底灰字)
+        bg_lum = 0.299 * float(bg_color[2]) + 0.587 * float(bg_color[1]) + 0.114 * float(bg_color[0])
+        tx_lum = 0.299 * float(text_color[2]) + 0.587 * float(text_color[1]) + 0.114 * float(text_color[0])
+        if abs(bg_lum - tx_lum) < 55.0:
+            text_color = np.array([255, 255, 255], dtype=np.uint8) if bg_lum < 128 else np.array([0, 0, 0], dtype=np.uint8)
+
         bg_hex = f"#{int(bg_color[2]):02x}{int(bg_color[1]):02x}{int(bg_color[0]):02x}"
         text_hex = f"#{int(text_color[2]):02x}{int(text_color[1]):02x}{int(text_color[0]):02x}"
         return bg_hex, text_hex

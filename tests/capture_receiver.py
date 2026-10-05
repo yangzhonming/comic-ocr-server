@@ -148,7 +148,10 @@ async def receive_slice(
 
     safe_cid = safe_name(chapter_id)
     chapter_dir = TEST_DATA_DIR / safe_cid
-    filename = f"slice_{slice_index:06d}_Y{start_y:09d}_{end_y:09d}.jpg"
+    if file.filename and ("切片" in file.filename or file.filename.startswith("slice_")):
+        filename = file.filename
+    else:
+        filename = f"slice_{slice_index:06d}_Y{start_y:09d}_{end_y:09d}.jpg"
 
     with _lock:
         chapter_dir.mkdir(parents=True, exist_ok=True)
