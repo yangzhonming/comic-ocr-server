@@ -15,6 +15,23 @@ jobs:
       - name: 检出仓库代码
         uses: actions/checkout@v4
 
+      - name: 检查 ACR 登录凭证配置
+        run: |
+          HAS_USER=false
+          HAS_PASS=false
+          if [ -n "${{ secrets.ALIYUN_ACR_USERNAME || vars.ALIYUN_ACR_USERNAME }}" ]; then HAS_USER=true; fi
+          if [ -n "${{ secrets.ALIYUN_ACR_PASSWORD || vars.ALIYUN_ACR_PASSWORD }}" ]; then HAS_PASS=true; fi
+          
+          if [ "$HAS_USER" = "false" ] || [ "$HAS_PASS" = "false" ]; then
+            echo "❌ 登录凭证未配置！"
+            echo "请访问：https://github.com/yangzhonming/comic-ocr-server/settings/secrets/actions"
+            echo "点击 [New repository secret] 确保添加了："
+            echo "  - ALIYUN_ACR_USERNAME"
+            echo "  - ALIYUN_ACR_PASSWORD"
+            exit 1
+          fi
+          echo "✅ 凭据检测通过，准备登录..."
+
       - name: 设置 Docker Buildx (支持多层高速缓存)
         uses: docker/setup-buildx-action@v3
 
@@ -22,8 +39,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: crpi-adr7aw7fhazomgpo.cn-shenzhen.personal.cr.aliyuncs.com
-          username: ${{ secrets.ALIYUN_ACR_USERNAME || vars.ALIYUN_ACR_USERNAME || secrets.DOCKER_USERNAME || vars.DOCKER_USERNAME }}
-          password: ${{ secrets.ALIYUN_ACR_PASSWORD || vars.ALIYUN_ACR_PASSWORD || secrets.DOCKER_PASSWORD || vars.DOCKER_PASSWORD }}
+          username: ${{ secrets.ALIYUN_ACR_USERNAME || vars.ALIYUN_ACR_USERNAME }}
+          password: ${{ secrets.ALIYUN_ACR_PASSWORD || vars.ALIYUN_ACR_PASSWORD }}
 
       - name: 高性能构建并推送镜像至阿里云
         uses: docker/build-push-action@v5
@@ -34,6 +51,5 @@ jobs:
           tags: |
             crpi-adr7aw7fhazomgpo.cn-shenzhen.personal.cr.aliyuncs.com/byd123/comic:v2
             crpi-adr7aw7fhazomgpo.cn-shenzhen.personal.cr.aliyuncs.com/byd123/comic:latest
-          # 启用 GitHub Actions 官方免费层级缓存
           cache-from: type=gha
           cache-to: type=gha,mode=max
