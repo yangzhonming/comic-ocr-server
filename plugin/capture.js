@@ -812,7 +812,14 @@
         let errType = '大模型请求异常';
         if (res.status === 401) errType = 'API Key 无效 (401)';
         else if (res.status === 402) errType = '账户欠费 / 额度耗尽 (402)';
-        else if (res.status === 429) errType = '频次超限 / 并发限制 (429)';
+        else if (res.status === 429) {
+          if (/remaining balance|top up|balance|余额/i.test(errDetail)) {
+            errType = '💰 余额过低触发并发降级 (需充值)';
+            errDetail = 'DeepSeek 账户余额较低触发官方风控 (并发被压至 5)，充值后可立即恢复 500+ 高并发。原始提示: ' + errDetail;
+          } else {
+            errType = '频次超限 / 并发限制 (429)';
+          }
+        }
         else if (res.status >= 500) errType = '大模型服务端故障 (5xx)';
 
         if (globalThis.ComicErrorTracker) {

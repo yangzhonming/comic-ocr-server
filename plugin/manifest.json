@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "漫画切片与补丁测试版",
-  "version": "0.8.5",
-  "description": "长漫阅读器汉化插件：支持本地/云端OCR切片流水线、前端大模型流式直连、压测遥测全报文透视与并发调度调优。",
+  "version": "0.8.6",
+  "description": "长漫阅读器汉化插件：支持本地/云端OCR切片流水线、前端大模型流式直连、大模型低余额限频智能识别告警。",
   "permissions": ["activeTab", "storage", "declarativeNetRequest"],
   "host_permissions": ["<all_urls>", "http://127.0.0.1:*/*", "http://127.0.0.1:8765/*", "http://127.0.0.1:9000/*", "http://127.0.0.1:8000/*"],
   "action": {

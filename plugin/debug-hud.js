@@ -112,7 +112,7 @@
       </style>
       <div class="hud">
         <div class="header">
-          <span>🛠️ Dev HUD v0.8.5</span>
+          <span>🛠️ Dev HUD v0.8.6</span>
           <button class="close-btn" title="关闭面板 (Console 输入 enableComicDebug() 重新开启)">✕</button>
         </div>
         <div class="section">
