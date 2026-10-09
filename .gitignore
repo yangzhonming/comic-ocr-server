@@ -10,3 +10,6 @@ captures/
 debug_output/
 tests/data/
 tests/output/
+
+_metadata/
+*.lnk

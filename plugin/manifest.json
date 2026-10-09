@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "漫画切片与补丁测试版",
+  "version": "0.8.5",
+  "description": "长漫阅读器汉化插件：支持本地/云端OCR切片流水线、前端大模型流式直连、压测遥测全报文透视与并发调度调优。",
+  "permissions": ["activeTab", "storage", "declarativeNetRequest"],
+  "host_permissions": ["<all_urls>", "http://127.0.0.1:*/*", "http://127.0.0.1:8765/*", "http://127.0.0.1:9000/*", "http://127.0.0.1:8000/*"],
+  "action": {
+    "default_title": "漫画页面识别",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["shared.js", "store.js", "classifier.js", "slicing/virtual-strip.js", "slicing/slice-algorithm.js", "slicing/pixel-provider.js", "slicing/slice-pipeline.js", "slicing/capture-flow.js", "debug-hud.js", "capture.js", "floating-ball.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "declarative_net_request": {
+    "rule_resources": [{ "id": "image_cors", "enabled": true, "path": "rules.json" }]
+  }
+}

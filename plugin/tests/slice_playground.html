@@ -1,0 +1,1117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>漫画流式切片与 OCR 算法演练台 (Algorithm Playground)</title>
+  <style>
+    :root {
+      --bg-dark: #0f172a;
+      --panel-bg: rgba(30, 41, 59, 0.85);
+      --card-bg: rgba(15, 23, 42, 0.7);
+      --border-color: rgba(56, 189, 248, 0.25);
+      --accent: #38bdf8;
+      --accent-hover: #0ea5e9;
+      --green: #22c55e;
+      --warn: #eab308;
+      --danger: #ef4444;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans SC", sans-serif;
+      background: var(--bg-dark);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      font-size: 12px;
+    }
+    /* Header */
+    header {
+      height: 48px;
+      background: rgba(15, 23, 42, 0.95);
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      flex-shrink: 0;
+      z-index: 10;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .brand h1 {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: 0.5px;
+    }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 8px;
+      border-radius: 12px;
+      background: rgba(34, 197, 94, 0.15);
+      border: 1px solid rgba(34, 197, 94, 0.4);
+      color: var(--green);
+      font-size: 11px;
+    }
+    .status-badge.error {
+      background: rgba(239, 68, 68, 0.15);
+      border-color: rgba(239, 68, 68, 0.4);
+      color: var(--danger);
+    }
+    /* Layout */
+    .workbench {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+    /* Left Panel - Params */
+    .panel-left {
+      width: 320px;
+      background: var(--panel-bg);
+      border-right: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      overflow-y: auto;
+    }
+    .panel-section {
+      padding: 12px 14px;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+    }
+    .section-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    /* Upload Zone */
+    .drop-zone {
+      border: 1.5px dashed rgba(56, 189, 248, 0.4);
+      border-radius: 8px;
+      padding: 16px 10px;
+      text-align: center;
+      cursor: pointer;
+      background: rgba(15, 23, 42, 0.5);
+      transition: all 0.2s ease;
+    }
+    .drop-zone:hover, .drop-zone.dragover {
+      border-color: var(--accent);
+      background: rgba(56, 189, 248, 0.1);
+    }
+    .drop-zone p { color: var(--text-muted); font-size: 11px; margin-top: 4px; }
+    /* Form controls */
+    .form-group {
+      margin-bottom: 10px;
+    }
+    .form-group label {
+      display: flex;
+      justify-content: space-between;
+      color: #cbd5e1;
+      font-size: 11px;
+      margin-bottom: 4px;
+    }
+    .form-group .val-tag {
+      color: var(--accent);
+      font-weight: 700;
+    }
+    .input-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    input[type="number"], input[type="text"], select {
+      background: rgba(15, 23, 42, 0.8);
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      color: var(--text);
+      padding: 5px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      width: 100%;
+      outline: none;
+    }
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+    .preset-btns {
+      display: flex;
+      gap: 4px;
+      margin-top: 4px;
+    }
+    .preset-btn {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      color: var(--text-muted);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      cursor: pointer;
+    }
+    .preset-btn:hover {
+      background: rgba(56, 189, 248, 0.2);
+      color: var(--text);
+    }
+    .toggle-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    .checkbox-label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: #cbd5e1;
+      cursor: pointer;
+      font-size: 11px;
+    }
+    .checkbox-label input { accent-color: var(--accent); }
+    /* Action Buttons */
+    .btn-primary {
+      width: 100%;
+      background: var(--accent);
+      color: #0f172a;
+      border: none;
+      padding: 8px 0;
+      border-radius: 6px;
+      font-weight: 700;
+      cursor: pointer;
+      font-size: 12px;
+      transition: background 0.15s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    .btn-primary:hover { background: var(--accent-hover); color: #fff; }
+    .btn-secondary {
+      width: 100%;
+      background: rgba(15, 23, 42, 0.6);
+      color: var(--text-muted);
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      padding: 6px 0;
+      border-radius: 6px;
+      cursor: pointer;
+      margin-top: 6px;
+    }
+    .btn-secondary:hover { color: var(--text); border-color: var(--text); }
+    /* Middle Canvas Area */
+    .viewport-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: #020617;
+      position: relative;
+      overflow: hidden;
+    }
+    .canvas-toolbar {
+      height: 38px;
+      background: rgba(15, 23, 42, 0.85);
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+      z-index: 5;
+    }
+    .layer-toggles {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .canvas-container {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      cursor: grab;
+      user-select: none;
+    }
+    .canvas-container:active { cursor: grabbing; }
+    #mainCanvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      transform-origin: 0 0;
+    }
+    /* Floating Tooltip */
+    #tooltip {
+      position: absolute;
+      display: none;
+      pointer-events: none;
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid var(--accent);
+      box-shadow: 0 10px 25px -5px rgba(0,0,0,0.8), 0 0 12px rgba(56, 189, 248, 0.3);
+      border-radius: 8px;
+      padding: 10px 12px;
+      color: var(--text);
+      font-size: 11px;
+      line-height: 1.5;
+      z-index: 100;
+      max-width: 280px;
+    }
+    #tooltip .tip-header {
+      font-weight: 700;
+      color: var(--accent);
+      border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+      padding-bottom: 4px;
+      margin-bottom: 6px;
+      display: flex;
+      justify-content: space-between;
+    }
+    /* Right Panel - Results */
+    .panel-right {
+      width: 360px;
+      background: var(--panel-bg);
+      border-left: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+    /* Telemetry Grid */
+    .telemetry-bar {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+      padding: 10px;
+      background: rgba(15, 23, 42, 0.9);
+      border-bottom: 1px solid var(--border-color);
+    }
+    .telemetry-item {
+      background: rgba(30, 41, 59, 0.5);
+      padding: 6px 8px;
+      border-radius: 6px;
+      border: 1px solid rgba(148, 163, 184, 0.15);
+    }
+    .telemetry-label { color: var(--text-muted); font-size: 10px; }
+    .telemetry-val { font-weight: 700; color: var(--accent); font-size: 13px; margin-top: 2px; }
+    .telemetry-val.highlight { color: var(--green); }
+    /* Tabs */
+    .tabs-header {
+      display: flex;
+      border-bottom: 1px solid var(--border-color);
+      background: rgba(15, 23, 42, 0.7);
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 8px 0;
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 600;
+      border-bottom: 2px solid transparent;
+    }
+    .tab-btn.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+      background: rgba(56, 189, 248, 0.08);
+    }
+    .tabs-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px;
+    }
+    /* Lists */
+    .rec-item-card {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      border-radius: 6px;
+      padding: 8px;
+      margin-bottom: 8px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      transition: all 0.15s ease;
+    }
+    .rec-item-card:hover {
+      border-color: var(--accent);
+      background: rgba(56, 189, 248, 0.05);
+    }
+    .rec-thumb {
+      width: 60px;
+      height: 32px;
+      object-fit: contain;
+      background: #000;
+      border-radius: 4px;
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      flex-shrink: 0;
+    }
+    .rec-meta { flex: 1; overflow: hidden; }
+    .rec-text {
+      font-size: 12px;
+      font-weight: 600;
+      color: #fff;
+      word-break: break-all;
+    }
+    .rec-badges {
+      display: flex;
+      gap: 6px;
+      margin-top: 3px;
+      font-size: 10px;
+      color: var(--text-muted);
+    }
+    .bubble-card {
+      background: rgba(15, 23, 42, 0.7);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 10px;
+    }
+    .bubble-header {
+      display: flex;
+      justify-content: space-between;
+      color: var(--accent);
+      font-weight: 700;
+      margin-bottom: 6px;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+      padding-bottom: 4px;
+    }
+    .bubble-content {
+      background: rgba(0, 0, 0, 0.3);
+      padding: 8px;
+      border-radius: 6px;
+      font-size: 12px;
+      line-height: 1.4;
+      white-space: pre-wrap;
+      color: #e2e8f0;
+      border-left: 3px solid var(--accent);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 头部状态栏 -->
+  <header>
+    <div class="brand">
+      <span style="font-size:18px;">⚡</span>
+      <h1>漫画流式切片与 OCR 算法演练台 (Algorithm Playground)</h1>
+      <span style="color:#64748b;font-size:11px;">| v0.7.1</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px;">
+      <span id="serverStatusBadge" class="status-badge">🟢 调试后端已连接 (127.0.0.1:9000)</span>
+    </div>
+  </header>
+
+  <div class="workbench">
+
+    <!-- 左侧：参数沙盒控制台 -->
+    <div class="panel-left">
+
+      <!-- 图片上传区 -->
+      <div class="panel-section">
+        <div class="section-title">
+          <span>1. 切片素材加载</span>
+          <span style="font-size:10px;color:#64748b;">支持任意切片</span>
+        </div>
+
+        <!-- 快速选择捕获的切片 -->
+        <div style="margin-bottom:8px;">
+          <div style="font-size:11px;color:#94a3b8;margin-bottom:4px;">从已捕获样本中载入:</div>
+          <div style="display:flex;gap:6px;">
+            <select id="select_capture" style="flex:1;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:4px;padding:4px 6px;font-size:11px;">
+              <option value="">-- 扫描已捕获样本中... --</option>
+            </select>
+            <button id="btn_load_capture" class="preset-btn" style="padding:4px 10px;font-size:11px;color:#38bdf8;border-color:rgba(56,189,248,0.4);">载入</button>
+          </div>
+        </div>
+
+        <div class="drop-zone" id="dropZone">
+          <span style="font-size:20px;">🖼️</span>
+          <p><strong>点击选择</strong> 或 <strong>拖拽切片图片</strong> 到此</p>
+          <p style="color:#64748b;font-size:10px;">可直接使用 captures/ 里的 切片0.jpg 等</p>
+          <input type="file" id="fileInput" accept="image/jpeg,image/png" style="display:none;">
+        </div>
+      </div>
+
+      <!-- DET 检测参数 -->
+      <div class="panel-section">
+        <div class="section-title">
+          <span>2. DET 文本检测参数 (DBNet)</span>
+        </div>
+
+        <div class="form-group">
+          <label>
+            <span>最长边限制 (det_limit_side_len)</span>
+            <span class="val-tag" id="disp_limit">1024</span>
+          </label>
+          <input type="number" id="input_limit" value="1024" step="32" min="320" max="2560">
+          <div class="preset-btns">
+            <button class="preset-btn" onclick="setLimit(736)">736</button>
+            <button class="preset-btn" onclick="setLimit(960)">960</button>
+            <button class="preset-btn" onclick="setLimit(1024)">1024</button>
+            <button class="preset-btn" onclick="setLimit(1280)">1280</button>
+            <button class="preset-btn" onclick="setLimit(1536)">1536</button>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>
+            <span>二值化概率阈值 (det_thresh)</span>
+            <span class="val-tag" id="disp_thresh">0.30</span>
+          </label>
+          <input type="range" id="input_thresh" min="0.10" max="0.70" step="0.02" value="0.30">
+        </div>
+
+        <div class="form-group">
+          <label>
+            <span>几何外扩系数 (det_unclip_ratio)</span>
+            <span class="val-tag" id="disp_unclip">1.60</span>
+          </label>
+          <input type="range" id="input_unclip" min="1.20" max="2.40" step="0.05" value="1.60">
+          <div style="font-size:10px;color:#64748b;margin-top:2px;">推荐最佳区间: 1.6 ~ 1.8</div>
+        </div>
+
+        <div class="form-group">
+          <label>
+            <span>框置信度过滤 (det_box_thresh)</span>
+            <span class="val-tag" id="disp_box_thresh">0.50</span>
+          </label>
+          <input type="range" id="input_box_thresh" min="0.20" max="0.80" step="0.05" value="0.50">
+        </div>
+      </div>
+
+      <!-- REC 识别参数 -->
+      <div class="panel-section">
+        <div class="section-title">
+          <span>3. REC 文本识别参数 (PP-OCRv5)</span>
+        </div>
+
+        <div class="form-group">
+          <label>
+            <span>REC 置信分数过滤 (rec_score_thresh)</span>
+            <span class="val-tag" id="disp_rec_thresh">0.50</span>
+          </label>
+          <input type="range" id="input_rec_thresh" min="0.10" max="0.90" step="0.05" value="0.50">
+        </div>
+
+        <div class="form-group">
+          <label><span>目标语种 (lang)</span></label>
+          <select id="select_lang">
+            <option value="kr" selected>韩语 (kr - korean_PP-OCRv5)</option>
+            <option value="en">英语 (en - en_PP-OCRv5)</option>
+            <option value="jp">日语 (jp - japan_PP-OCRv4)</option>
+            <option value="zh">中文 (zh - 内置中文模型)</option>
+            <option value="ru">俄语 (ru - cyrillic_PP-OCRv5)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- 连通性参数 -->
+      <div class="panel-section">
+        <div class="section-title">
+          <span>4. 气泡拓扑连通参数 (Clustering)</span>
+        </div>
+
+        <div class="form-group">
+          <label>
+            <span>拟声词高度比护盾 (sfx_height_ratio)</span>
+            <span class="val-tag" id="disp_sfx_ratio">2.2</span>
+          </label>
+          <input type="range" id="input_sfx_ratio" min="1.5" max="4.5" step="0.1" value="2.2">
+        </div>
+
+        <div class="form-group">
+          <label>
+            <span>纵向行间距倍数 (vertical_gap_ratio)</span>
+            <span class="val-tag" id="disp_v_gap">1.3</span>
+          </label>
+          <input type="range" id="input_v_gap" min="0.8" max="2.5" step="0.1" value="1.3">
+        </div>
+
+        <div class="form-group">
+          <label>
+            <span>同行垂直中心容差 (horizontal_center_tol)</span>
+            <span class="val-tag" id="disp_h_center">0.6</span>
+          </label>
+          <input type="range" id="input_h_center" min="0.1" max="0.8" step="0.05" value="0.6">
+        </div>
+
+        <div class="form-group">
+          <label>
+            <span>同行水平间距倍数 (horizontal_gap_ratio)</span>
+            <span class="val-tag" id="disp_h_gap">2.0</span>
+          </label>
+          <input type="range" id="input_h_gap" min="1.0" max="3.5" step="0.1" value="2.0">
+        </div>
+
+        <div class="toggle-group">
+          <label class="checkbox-label" title="开启后，若小框超过70%落在大框内，自动剔除小框，消灭局部笔画双重检测">
+            <input type="checkbox" id="chk_filter_nested">
+            <span style="color:#4ade80;font-weight:600;">[★] 开启嵌套大框包含小框抑制</span>
+          </label>
+
+          <label class="checkbox-label" title="开启后，同行文本按空格拼接，避免将同行切断文字错误换行">
+            <input type="checkbox" id="chk_horizontal_merge" checked>
+            <span style="color:#38bdf8;">[★] 同行横向空格拼接模式</span>
+          </label>
+        </div>
+      </div>
+
+      <!-- 触发按钮 -->
+      <div class="panel-section" style="border-bottom:none;">
+        <button class="btn-primary" id="btnRun">
+          <span>▶️ 立即运行算法管线</span>
+        </button>
+        <button class="btn-secondary" id="btnReset">↺ 重置为推荐默认参数</button>
+      </div>
+
+    </div>
+
+    <!-- 中间：主原图 Canvas 交互视口 -->
+    <div class="viewport-area">
+      <div class="canvas-toolbar">
+        <div class="layer-toggles">
+          <label class="checkbox-label">
+            <input type="checkbox" id="chk_show_image" checked>
+            <span>原图底图</span>
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" id="chk_show_det" checked>
+            <span style="color:#4ade80;">🟩 DET 原始绿框</span>
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" id="chk_show_bubble" checked>
+            <span style="color:#38bdf8;">🟦 气泡聚类大框</span>
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" id="chk_show_mask">
+            <span style="color:#facc15;">🟡 二值掩码图</span>
+          </label>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:8px;">
+          <button class="preset-btn" onclick="resetZoom()">1:1 复位</button>
+          <button class="preset-btn" onclick="fitZoom()">适应窗口</button>
+          <span style="font-size:10px;color:#64748b;">(滚轮缩放，鼠标拖拽平移)</span>
+        </div>
+      </div>
+
+      <div class="canvas-container" id="canvasContainer">
+        <canvas id="mainCanvas"></canvas>
+        <div id="tooltip"></div>
+      </div>
+    </div>
+
+    <!-- 右侧：遥测与结果明细清单 -->
+    <div class="panel-right">
+
+      <!-- 实时遥测指标面板 -->
+      <div class="telemetry-bar">
+        <div class="telemetry-item">
+          <div class="telemetry-label">端到端总耗时</div>
+          <div class="telemetry-val highlight" id="tm_total">0.0 ms</div>
+        </div>
+        <div class="telemetry-item">
+          <div class="telemetry-label">DET 文本检测</div>
+          <div class="telemetry-val" id="tm_det">0.0 ms</div>
+        </div>
+        <div class="telemetry-item">
+          <div class="telemetry-label">REC 文本识别</div>
+          <div class="telemetry-val" id="tm_rec">0.0 ms</div>
+        </div>
+        <div class="telemetry-item">
+          <div class="telemetry-label">DET 卷积 Pass</div>
+          <div class="telemetry-val" id="tm_passes">1 次</div>
+        </div>
+        <div class="telemetry-item">
+          <div class="telemetry-label">连通聚类耗时</div>
+          <div class="telemetry-val" id="tm_cluster">0.0 ms</div>
+        </div>
+        <div class="telemetry-item">
+          <div class="telemetry-label">检出行 / 气泡</div>
+          <div class="telemetry-val" id="tm_counts">0 / 0</div>
+        </div>
+      </div>
+
+      <!-- 结果选项卡 -->
+      <div class="tabs-header">
+        <button class="tab-btn active" onclick="switchTab('rec')">📜 REC 逐行切片明细</button>
+        <button class="tab-btn" onclick="switchTab('bubbles')">💬 气泡聚类合并结果</button>
+      </div>
+
+      <div class="tabs-body" id="tabContentRec">
+        <div style="text-align:center;color:#64748b;padding:30px 0;">请先加载切片并运行推理</div>
+      </div>
+
+      <div class="tabs-body" id="tabContentBubbles" style="display:none;">
+        <div style="text-align:center;color:#64748b;padding:30px 0;">请先加载切片并运行推理</div>
+      </div>
+
+    </div>
+
+  </div>
+
+  <script>
+    const API_ENDPOINT = 'http://127.0.0.1:9000/api/debug/inspect_slice';
+
+    let currentFile = null;
+    let sourceImage = null;
+    let maskImage = null;
+    let pipelineData = null;
+
+    let scale = 1.0;
+    let panX = 0;
+    let panY = 0;
+    let isDragging = false;
+    let startX, startY;
+
+    const canvas = document.getElementById('mainCanvas');
+    const ctx = canvas.getContext('2d');
+    const container = document.getElementById('canvasContainer');
+    const tooltip = document.getElementById('tooltip');
+
+    // UI elements
+    const inputLimit = document.getElementById('input_limit');
+    const inputThresh = document.getElementById('input_thresh');
+    const inputUnclip = document.getElementById('input_unclip');
+    const inputBoxThresh = document.getElementById('input_box_thresh');
+    const inputRecThresh = document.getElementById('input_rec_thresh');
+    const selectLang = document.getElementById('select_lang');
+    const inputSfxRatio = document.getElementById('input_sfx_ratio');
+    const inputVGap = document.getElementById('input_v_gap');
+    const inputHCenter = document.getElementById('input_h_center');
+    const inputHGap = document.getElementById('input_h_gap');
+    const chkFilterNested = document.getElementById('chk_filter_nested');
+    const chkHorizontalMerge = document.getElementById('chk_horizontal_merge');
+
+    // Display binders
+    function bindSlider(input, disp) {
+      input.addEventListener('input', () => disp.textContent = input.value);
+    }
+    bindSlider(inputLimit, document.getElementById('disp_limit'));
+    bindSlider(inputThresh, document.getElementById('disp_thresh'));
+    bindSlider(inputUnclip, document.getElementById('disp_unclip'));
+    bindSlider(inputBoxThresh, document.getElementById('disp_box_thresh'));
+    bindSlider(inputRecThresh, document.getElementById('disp_rec_thresh'));
+    bindSlider(inputSfxRatio, document.getElementById('disp_sfx_ratio'));
+    bindSlider(inputVGap, document.getElementById('disp_v_gap'));
+    bindSlider(inputHCenter, document.getElementById('disp_h_center'));
+    bindSlider(inputHGap, document.getElementById('disp_h_gap'));
+
+    function setLimit(val) {
+      inputLimit.value = val;
+      document.getElementById('disp_limit').textContent = val;
+    }
+
+    // File Upload handling
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+
+    dropZone.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', e => {
+      if (e.target.files[0]) loadFile(e.target.files[0]);
+    });
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', e => {
+      e.preventDefault();
+      dropZone.classList.remove('dragover');
+      if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+    });
+
+    // 初始化捕获样本列表
+    async function initCapturesList() {
+      const sel = document.getElementById('select_capture');
+      try {
+        const res = await fetch('/api/debug/list_captures');
+        if (!res.ok) throw new Error('API request failed');
+        const data = await res.json();
+        if (!data.sessions || !data.sessions.length) {
+          sel.innerHTML = '<option value="">(未找到已捕获的切片)</option>';
+          return;
+        }
+        let html = '<option value="">-- 请选择切片样本 --</option>';
+        data.sessions.forEach(s => {
+          s.slices.forEach(sl => {
+            html += `<option value="${s.session}||${sl}">${sl} [${s.session.substring(0, 16)}...]</option>`;
+          });
+        });
+        sel.innerHTML = html;
+      } catch (err) {
+        sel.innerHTML = '<option value="">(无法获取捕获列表)</option>';
+      }
+    }
+    initCapturesList();
+
+    async function loadSelectedCapture() {
+      const sel = document.getElementById('select_capture');
+      if (!sel.value) return;
+      const [session, filename] = sel.value.split('||');
+      try {
+        const res = await fetch(`/api/debug/get_capture?session=${encodeURIComponent(session)}&filename=${encodeURIComponent(filename)}`);
+        if (!res.ok) throw new Error('Failed to load image');
+        const blob = await res.blob();
+        const file = new File([blob], filename, { type: blob.type || 'image/jpeg' });
+        loadFile(file);
+      } catch (e) {
+        alert('加载样本切片失败: ' + e.message);
+      }
+    }
+
+    document.getElementById('btn_load_capture').addEventListener('click', loadSelectedCapture);
+    document.getElementById('select_capture').addEventListener('change', () => {
+      if (document.getElementById('select_capture').value) loadSelectedCapture();
+    });
+
+    function loadFile(file) {
+      currentFile = file;
+      dropZone.querySelector('p').innerHTML = `已载入: <strong>${file.name}</strong> (${(file.size/1024).toFixed(1)} KB)`;
+      const reader = new FileReader();
+      reader.onload = ev => {
+        sourceImage = new Image();
+        sourceImage.onload = () => {
+          fitZoom();
+          runPipeline();
+        };
+        sourceImage.src = ev.target.result;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    async function runPipeline() {
+      if (!currentFile) {
+        alert('请先选择或拖拽切片图片！');
+        return;
+      }
+      const btn = document.getElementById('btnRun');
+      btn.textContent = '⏳ 正在推理中...';
+      btn.disabled = true;
+
+      const fd = new FormData();
+      fd.append('file', currentFile);
+      fd.append('det_limit_side_len', inputLimit.value);
+      fd.append('det_thresh', inputThresh.value);
+      fd.append('det_unclip_ratio', inputUnclip.value);
+      fd.append('det_box_thresh', inputBoxThresh.value);
+      fd.append('rec_score_thresh', inputRecThresh.value);
+      fd.append('sfx_height_ratio', inputSfxRatio.value);
+      fd.append('vertical_gap_ratio', inputVGap.value);
+      fd.append('horizontal_center_tol', inputHCenter.value);
+      fd.append('horizontal_gap_ratio', inputHGap.value);
+      fd.append('filter_nested_boxes', chkFilterNested.checked);
+      fd.append('horizontal_merge_mode', chkHorizontalMerge.checked);
+      fd.append('lang', selectLang.value);
+
+      try {
+        const resp = await fetch(API_ENDPOINT, { method: 'POST', body: fd });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        pipelineData = data;
+
+        // 加载二值掩码图
+        if (data.binary_mask_b64) {
+          maskImage = new Image();
+          maskImage.onload = () => redraw();
+          maskImage.src = data.binary_mask_b64;
+        }
+
+        renderTelemetry(data.timings, data.det_boxes.length, data.bubbles.length);
+        renderRecList(data.rec_items);
+        renderBubblesList(data.bubbles);
+        redraw();
+        document.getElementById('serverStatusBadge').className = 'status-badge';
+        document.getElementById('serverStatusBadge').textContent = '🟢 调试后端已连接 (127.0.0.1:9000)';
+      } catch (err) {
+        console.error(err);
+        document.getElementById('serverStatusBadge').className = 'status-badge error';
+        document.getElementById('serverStatusBadge').textContent = '🔴 调试后端连接失败: 请启动 debug_inspect_server';
+        alert('请求失败，请确保本地后台服务运行于 9000 端口: ' + err.message);
+      } finally {
+        btn.textContent = '▶️ 立即运行算法管线';
+        btn.disabled = false;
+      }
+    }
+
+    document.getElementById('btnRun').addEventListener('click', runPipeline);
+    document.getElementById('btnReset').addEventListener('click', () => {
+      setLimit(1024);
+      inputThresh.value = 0.30; document.getElementById('disp_thresh').textContent = '0.30';
+      inputUnclip.value = 1.60; document.getElementById('disp_unclip').textContent = '1.60';
+      inputBoxThresh.value = 0.50; document.getElementById('disp_box_thresh').textContent = '0.50';
+      inputRecThresh.value = 0.50; document.getElementById('disp_rec_thresh').textContent = '0.50';
+      inputSfxRatio.value = 2.2; document.getElementById('disp_sfx_ratio').textContent = '2.2';
+      inputVGap.value = 1.3; document.getElementById('disp_v_gap').textContent = '1.3';
+      inputHCenter.value = 0.6; document.getElementById('disp_h_center').textContent = '0.6';
+      inputHGap.value = 2.0; document.getElementById('disp_h_gap').textContent = '2.0';
+      chkFilterNested.checked = false;
+      chkHorizontalMerge.checked = true;
+      runPipeline();
+    });
+
+    // Layer checkboxes
+    ['chk_show_image', 'chk_show_det', 'chk_show_bubble', 'chk_show_mask'].forEach(id => {
+      document.getElementById(id).addEventListener('change', redraw);
+    });
+
+    // Telemetry & list renders
+    function renderTelemetry(tm, nDet, nBub) {
+      document.getElementById('tm_total').textContent = `${tm.time_total_ms} ms`;
+      document.getElementById('tm_det').textContent = `${tm.time_det_ms} ms`;
+      document.getElementById('tm_rec').textContent = `${tm.time_rec_ms} ms`;
+      document.getElementById('tm_passes').textContent = `${tm.det_passes} Pass (单次卷积)`;
+      document.getElementById('tm_cluster').textContent = `${tm.time_cluster_ms} ms`;
+      document.getElementById('tm_counts').textContent = `${nDet} 行 / ${nBub} 气泡`;
+    }
+
+    function renderRecList(items) {
+      const container = document.getElementById('tabContentRec');
+      if (!items || !items.length) {
+        container.innerHTML = '<div style="text-align:center;color:#64748b;padding:30px 0;">未检出任何有效文本行</div>';
+        return;
+      }
+      container.innerHTML = items.map(item => `
+        <div class="rec-item-card" style="${item.is_nested ? 'opacity:0.5;border-color:#ef4444;' : ''}">
+          <img class="rec-thumb" src="${item.thumb_b64}" alt="crop">
+          <div class="rec-meta">
+            <div class="rec-text">${escapeHtml(item.text || '(空字符)')}</div>
+            <div class="rec-badges">
+              <span>#${item.id}</span>
+              <span style="color:#22c55e;">Score: ${item.score}</span>
+              <span>DET: ${item.det_score}</span>
+              ${item.is_nested ? '<span style="color:#ef4444;font-weight:700;">[嵌套框]</span>' : ''}
+              <span>${item.w}×${item.h}px</span>
+            </div>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function renderBubblesList(bubbles) {
+      const container = document.getElementById('tabContentBubbles');
+      if (!bubbles || !bubbles.length) {
+        container.innerHTML = '<div style="text-align:center;color:#64748b;padding:30px 0;">未形成任何气泡</div>';
+        return;
+      }
+      container.innerHTML = bubbles.map(b => `
+        <div class="bubble-card">
+          <div class="bubble-header">
+            <span>气泡 #${b.bubble_id} (${b.line_count} 行)</span>
+            <span style="font-size:11px;color:#94a3b8;">字号: ${b.font_size}px</span>
+          </div>
+          <div class="bubble-content">${escapeHtml(b.text)}</div>
+          <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:10px;color:#64748b;">
+            <span>包含行: #${b.member_line_ids.join(', #')}</span>
+            <span>背景: ${b.bg} / 文字: ${b.fg}</span>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function switchTab(name) {
+      document.querySelectorAll('.tab-btn').forEach((b, i) => {
+        b.classList.toggle('active', (name === 'rec' && i === 0) || (name === 'bubbles' && i === 1));
+      });
+      document.getElementById('tabContentRec').style.display = name === 'rec' ? 'block' : 'none';
+      document.getElementById('tabContentBubbles').style.display = name === 'bubbles' ? 'block' : 'none';
+    }
+
+    function escapeHtml(str) {
+      return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // Canvas drawing and interactive zoom/pan
+    function redraw() {
+      if (!sourceImage) return;
+      canvas.width = sourceImage.width;
+      canvas.height = sourceImage.height;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // 1. 底图层
+      if (document.getElementById('chk_show_image').checked) {
+        ctx.drawImage(sourceImage, 0, 0);
+      }
+
+      // 2. 二值掩码层
+      if (document.getElementById('chk_show_mask').checked && maskImage) {
+        ctx.save();
+        ctx.globalAlpha = 0.55;
+        ctx.drawImage(maskImage, 0, 0, canvas.width, canvas.height);
+        ctx.restore();
+      }
+
+      // 3. DET 原始绿框
+      if (document.getElementById('chk_show_det').checked && pipelineData?.det_boxes) {
+        ctx.save();
+        pipelineData.det_boxes.forEach(item => {
+          const [x1, y1, x2, y2] = item.bbox;
+          const w = x2 - x1;
+          const h = y2 - y1;
+
+          if (item.is_nested) {
+            // 嵌套框使用品红色虚线高亮提醒
+            ctx.strokeStyle = '#f43f5e';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([4, 3]);
+            ctx.strokeRect(x1, y1, w, h);
+            ctx.fillStyle = 'rgba(244, 63, 94, 0.15)';
+            ctx.fillRect(x1, y1, w, h);
+          } else {
+            // 正常绿框
+            ctx.strokeStyle = '#22c55e';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([]);
+            ctx.strokeRect(x1, y1, w, h);
+            ctx.fillStyle = 'rgba(34, 197, 94, 0.08)';
+            ctx.fillRect(x1, y1, w, h);
+          }
+
+          // 绘制编号标签
+          ctx.fillStyle = item.is_nested ? '#f43f5e' : '#22c55e';
+          ctx.fillRect(x1, Math.max(0, y1 - 16), 26, 16);
+          ctx.fillStyle = '#0f172a';
+          ctx.font = 'bold 10px monospace';
+          ctx.fillText(`#${item.id}`, x1 + 3, Math.max(12, y1 - 4));
+        });
+        ctx.restore();
+      }
+
+      // 4. 气泡聚类合并后的大框
+      if (document.getElementById('chk_show_bubble').checked && pipelineData?.bubbles) {
+        ctx.save();
+        pipelineData.bubbles.forEach(b => {
+          const [x, y, w, h] = b.bbox;
+          ctx.strokeStyle = '#38bdf8';
+          ctx.lineWidth = 2.5;
+          ctx.setLineDash([6, 4]);
+          ctx.strokeRect(x, y, w, h);
+
+          // 半透明气泡底色
+          ctx.fillStyle = 'rgba(56, 189, 248, 0.12)';
+          ctx.fillRect(x, y, w, h);
+
+          // 气泡大标签
+          ctx.fillStyle = '#38bdf8';
+          ctx.fillRect(x, Math.max(0, y - 20), 75, 20);
+          ctx.fillStyle = '#0f172a';
+          ctx.font = 'bold 11px sans-serif';
+          ctx.fillText(`气泡 #${b.bubble_id}`, x + 5, Math.max(14, y - 6));
+        });
+        ctx.restore();
+      }
+
+      applyTransform();
+    }
+
+    function applyTransform() {
+      canvas.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+    }
+
+    function resetZoom() {
+      scale = 1.0;
+      panX = 20;
+      panY = 20;
+      applyTransform();
+    }
+
+    function fitZoom() {
+      if (!sourceImage) return;
+      const cw = container.clientWidth - 40;
+      const ch = container.clientHeight - 40;
+      scale = Math.min(cw / sourceImage.width, ch / sourceImage.height, 1.0);
+      panX = (container.clientWidth - sourceImage.width * scale) / 2;
+      panY = 20;
+      applyTransform();
+    }
+
+    // Pan & Zoom events
+    container.addEventListener('wheel', e => {
+      e.preventDefault();
+      const zoomFactor = e.deltaY < 0 ? 1.15 : 0.85;
+      const rect = container.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      panX = mouseX - (mouseX - panX) * zoomFactor;
+      panY = mouseY - (mouseY - panY) * zoomFactor;
+      scale *= zoomFactor;
+      applyTransform();
+    });
+
+    container.addEventListener('mousedown', e => {
+      isDragging = true;
+      startX = e.clientX - panX;
+      startY = e.clientY - panY;
+    });
+
+    window.addEventListener('mousemove', e => {
+      if (isDragging) {
+        panX = e.clientX - startX;
+        panY = e.clientY - startY;
+        applyTransform();
+      } else {
+        handleHover(e);
+      }
+    });
+
+    window.addEventListener('mouseup', () => isDragging = false);
+
+    // Hover Tooltip on Green Boxes
+    function handleHover(e) {
+      if (!sourceImage || !pipelineData?.det_boxes) {
+        tooltip.style.display = 'none';
+        return;
+      }
+      const rect = container.getBoundingClientRect();
+      const clientX = e.clientX - rect.left;
+      const clientY = e.clientY - rect.top;
+
+      // 转换到图片原始坐标
+      const imgX = (clientX - panX) / scale;
+      const imgY = (clientY - panY) / scale;
+
+      let foundItem = null;
+      let recMatch = null;
+      let bubbleMatch = null;
+
+      for (const item of pipelineData.det_boxes) {
+        const [x1, y1, x2, y2] = item.bbox;
+        if (imgX >= x1 && imgX <= x2 && imgY >= y1 && imgY <= y2) {
+          foundItem = item;
+          recMatch = pipelineData.rec_items?.find(r => r.id === item.id);
+          bubbleMatch = pipelineData.bubbles?.find(b => b.member_line_ids?.includes(item.id));
+          break;
+        }
+      }
+
+      if (foundItem) {
+        tooltip.style.display = 'block';
+        tooltip.style.left = `${e.clientX - rect.left + 15}px`;
+        tooltip.style.top = `${e.clientY - rect.top + 15}px`;
+
+        tooltip.innerHTML = `
+          <div class="tip-header">
+            <span>DET 文本框 #${foundItem.id}</span>
+            <span>${foundItem.score}</span>
+          </div>
+          <div><strong>尺寸:</strong> ${foundItem.w} × ${foundItem.h} px (比率: ${foundItem.aspect_ratio})</div>
+          <div><strong>REC 内容:</strong> <span style="color:#4ade80;font-weight:600;">"${recMatch ? escapeHtml(recMatch.text) : '未识别'}"</span></div>
+          <div><strong>REC 置信度:</strong> ${recMatch ? recMatch.score : 'N/A'}</div>
+          <div><strong>所属气泡:</strong> ${bubbleMatch ? '气泡 #' + bubbleMatch.bubble_id : '独立'}</div>
+          ${foundItem.is_nested ? '<div style="color:#f43f5e;font-weight:700;">⚠️ 判定为嵌套框 (已落在大框内)</div>' : ''}
+        `;
+      } else {
+        tooltip.style.display = 'none';
+      }
+    }
+  </script>
+</body>
+</html>

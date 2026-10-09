@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>漫画切片候选线与连通域 Demo</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1020;--panel:#121c30;--line:#2b3b56;--text:#edf4ff;--muted:#9fb0c9}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,"Microsoft YaHei",sans-serif}
+header{padding:17px 22px;background:#111a2c;border-bottom:1px solid var(--line)}h1{font-size:20px;margin:0}header p{margin:3px 0 0;color:var(--muted)}
+main{max-width:1700px;margin:auto;padding:13px;display:grid;grid-template-columns:285px minmax(0,1fr);gap:13px}
+aside,.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}aside{padding:14px;align-self:start}
+h2{font-size:13px;margin:3px 0 12px;color:#bdd1ef}label{display:block;color:#c8d6eb;margin-bottom:5px}
+.field{margin:11px 0}input[type=number],select{width:100%;background:#0a1425;color:#f3f7ff;border:1px solid #354967;border-radius:7px;padding:8px}
+input[type=range]{width:100%;accent-color:#50d5dc}.upload,button{display:block;width:100%;text-align:center;border:1px solid #37617d;background:#1b2d46;color:white;border-radius:8px;padding:9px;cursor:pointer;font-weight:650}
+.upload{border-style:dashed;margin-bottom:9px}.primary{background:#087f8b;border-color:#11a2aa}
+.info{background:#0b1527;border-radius:7px;padding:9px;color:#bcd0e6;font-size:12px;margin:10px 0}.small{font-size:11px;color:var(--muted)}
+.candidate-list{max-height:240px;overflow:auto}.item{padding:5px 7px;border-bottom:1px solid #283951;display:flex;justify-content:space-between;gap:8px}.item strong{color:#c3f68b}.bad{opacity:.65}
+.stage{display:grid;grid-template-columns:minmax(270px,1fr) minmax(330px,1fr);gap:13px;align-items:start}.right{display:flex;flex-direction:column;gap:13px}
+.card-title{padding:8px 11px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;font-weight:700}.card-title small{font-weight:400;color:var(--muted)}
+.scroll{max-height:83vh;overflow:auto;padding:10px;background:#0b1423}.page{position:relative;width:max-content;margin:auto;background:#fff}.page img{display:block;width:100%;max-width:none}.band{position:absolute;left:0;right:0;background:#ff5a6555;pointer-events:none}.blocked-band{position:absolute;left:0;right:0;background:#a976f140;pointer-events:none}.line-mark{position:absolute;left:0;right:0;height:2px;background:#ffc247;pointer-events:none;box-shadow:0 0 3px #000}.line-mark.rejected{opacity:.42;background:repeating-linear-gradient(90deg,#ffc247 0 9px,transparent 9px 15px)}.line-mark.center{background:#ff5a65;height:3px;z-index:2}.line-mark.winner{background:#82f28b;height:4px;z-index:3;box-shadow:0 0 8px #174b24}.line-mark.winner.uncertain{background:#ff9b45}
+.canvasbox{max-height:370px;overflow:auto;padding:10px;text-align:center;background:#0b1423}.canvasbox canvas{display:block;max-width:100%;height:auto;margin:auto;background:white}.legend{padding:8px 11px;color:#bacbe2;font-size:11px;display:flex;gap:11px;flex-wrap:wrap}.swatch{display:inline-block;width:9px;height:9px;margin-right:4px;border-radius:2px}.placeholder{padding:40px;text-align:center;color:#91a5c0}
+#graph{width:100%;height:170px;display:block;background:#0b1423}aside hr{border:0;border-top:1px solid var(--line);margin:14px 0}
+@media(max-width:1000px){main{grid-template-columns:240px minmax(0,1fr)}.stage{grid-template-columns:1fr}}@media(max-width:650px){main{display:block;padding:8px}aside{margin-bottom:12px}.scroll{max-height:65vh}}
+</style>
+</head>
+<body>
+<header><h1>候选切线 × 连通域 Demo</h1><p>低投影区段产生候选，疑似文字行形成保护框，最后按安全距离选线。</p></header>
+<main>
+<aside>
+<h2>图片</h2>
+<label class="upload" for="files">选择多张图片</label><input id="files" type="file" accept="image/*" multiple hidden>
+<div class="field"><label for="width">拼接宽度 W</label><input id="width" type="number" min="1" value="720"></div>
+<div class="field"><label for="order">图片顺序</label><select id="order"><option value="name">按文件名数字排序</option><option value="select">按选择顺序</option></select></div>
+<button id="build">拼接图片</button><div id="imageInfo" class="info">等待图片</div>
+<hr>
+<h2>移动搜索范围</h2>
+<div class="field"><label for="center">目标中心：<b id="centerValue">—</b></label><input id="center" type="range" min="0" max="100" value="0"></div>
+<div class="field"><label for="radius">搜索半径：<b id="radiusValue">—</b></label><input id="radius" type="range" min="40" max="1800" value="286"></div>
+<div class="small">初始中心为 3.46W，初始半径为 0.86W；文字保护距离为 0.09W。拖动后可测试其他画面。</div>
+<div class="field"><label for="ruleMode">可疑文字规则</label><select id="ruleMode"><option value="scaled">字号约 0.087W（新版）</option><option value="legacy">仅尺寸与邻近（旧版）</option></select></div>
+<button id="run" class="primary" style="margin-top:13px">分析候选线</button>
+<div id="status" class="info">拼接图片后显示结果</div>
+<h2>候选线</h2><div id="candidates" class="candidate-list small">暂无</div>
+<div class="small" style="margin-top:10px">紫框为高可信疑似文字块，紫色横带含 0.09W 保护距离；灰色虚框为低可信行。橙色命中线表示仍靠近低可信行，需要复核。</div>
+</aside>
+<section class="stage">
+<div class="card"><div class="card-title">拼接原图 <small id="pageMeta">—</small></div><div class="scroll"><div id="page" class="page"><div class="placeholder">选择图片</div></div></div>
+<div class="legend"><span><i class="swatch" style="background:#ff5a65"></i>搜索带</span><span><i class="swatch" style="background:#a976f1"></i>危险区</span><span><i class="swatch" style="background:#ffc247"></i>候选线</span><span><i class="swatch" style="background:#82f28b"></i>最终线</span></div></div>
+<div class="right">
+<div class="card"><div class="card-title">Otsu 二值化 <small id="binaryMeta">—</small></div><div class="canvasbox"><canvas id="binary"></canvas></div></div>
+<div class="card"><div class="card-title">连通域与疑似文字保护框 <small id="componentMeta">—</small></div><div class="canvasbox"><canvas id="components"></canvas></div>
+<div class="legend"><span><i class="swatch" style="background:#2787d4"></i>深色小连通域</span><span><i class="swatch" style="background:#e49b45"></i>浅色小连通域</span><span><i class="swatch" style="background:#a976f1"></i>高可信行</span><span><i class="swatch" style="background:#aeb9c9"></i>低可信行</span></div></div>
+<div class="card"><div class="card-title">水平投影 <small>横向是页面纵坐标 y</small></div><canvas id="graph"></canvas></div>
+</div>
+</section>
+</main>
+<script src="slicing/slice-algorithm.js"></script>
+<script src="slicing/slice-demo.js"></script>
+</body></html>
+

@@ -11,3 +11,7 @@ debug_output/
 __pycache__
 .env*
 .DS_Store
+
+plugin/
+_metadata/
+*.lnk
