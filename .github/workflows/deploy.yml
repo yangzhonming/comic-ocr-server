@@ -6,6 +6,11 @@ on:
       - main
   workflow_dispatch:
 
+# 核心优化：每次新提交自动停止/取消正在运行的旧构建
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
