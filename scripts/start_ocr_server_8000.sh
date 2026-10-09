@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # 自动释放已占用的 8000 端口，避免 Address already in use 报错
-fuser -k 8000/tcp 2>/dev/null || true
+(fuser -k 8000/tcp 2>/dev/null || true); sleep 1
 
 cd "$PROJECT_ROOT"
 source .venv/bin/activate

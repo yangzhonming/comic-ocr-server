@@ -14,7 +14,10 @@ from app.schemas import HealthResponse, SliceResponse
 async def lifespan(app: FastAPI):
     # 启动时预热常用语种模型 (韩语)，消除首次请求的冷启动开销
     print("[ComicServer] 正在预热 ONNX Runtime 引擎...")
-    warmed = engine_manager.warmup(["kr"])
+    # 限制 OpenCV 内部线程数为 1，避免高并发裁切时的 CPU 上下文切换争抢
+    cv2.setNumThreads(1)
+    print("[ComicServer] 正在预热 ONNX Runtime 引擎 (韩/英/日)...")
+    warmed = engine_manager.warmup(["kr", "en", "ja"])
     print(f"[ComicServer] 引擎预热完成，已激活语种: {warmed}")
     yield
     print("[ComicServer] 服务关闭，释放资源。")

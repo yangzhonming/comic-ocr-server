@@ -108,6 +108,31 @@ def suppress_contained_boxes(
     return kept
 
 
+LANG_SCALES = {
+    "kr": 0.089,
+    "ko": 0.089,
+    "korean": 0.089,
+    "en": 0.065,
+    "english": 0.065,
+    "ru": 0.068,
+    "russian": 0.068,
+    "cyrillic": 0.068,
+    "jp": 0.090,
+    "ja": 0.090,
+    "japanese": 0.090,
+    "zh": 0.080,
+    "chinese": 0.080,
+}
+DEFAULT_LANG_SCALE = 0.089
+
+
+def get_lang_scale(lang: Optional[str]) -> float:
+    if not lang:
+        return DEFAULT_LANG_SCALE
+    key = lang.strip().lower()
+    return LANG_SCALES.get(key, DEFAULT_LANG_SCALE)
+
+
 class OcrEngineManager:
     """
     OCR 模型管理器与推理引擎 (CPU 极致优化版)
@@ -165,14 +190,18 @@ class OcrEngineManager:
             det_path = os.path.join(self.base_dir, self.DET_MODEL_PATH)
 
             # 配置参数：1024 限制，DBNet 阈值，关闭形态学膨胀
+            # 配置参数：1024 限制，DBNet 阈值，关闭形态学膨胀，多线程与批处理极致加速
             common_kwargs = {
                 "det_model_path": det_path,
                 "det_limit_side_len": 1024,
                 "det_limit_type": "max",
-                "det_box_thresh": 0.50,
+                "det_box_thresh": 0.55,
                 "det_thresh": 0.30,
                 "det_unclip_ratio": 1.60,
                 "det_use_dilation": False,
+                "rec_batch_num": 16,
+                "intra_op_num_threads": int(os.environ.get("OCR_NUM_THREADS", 2)),
+                "inter_op_num_threads": 1,
             }
 
             if normalized_lang in self.SUPPORTED_LANGUAGES:
@@ -216,25 +245,35 @@ class OcrEngineManager:
         start_y: int = 0
     ) -> List[BubbleItem]:
         """
-        单切片全流程处理核心管道:
-        1. DET 检测 (最长边 1024 等比缩放，Passes=1)
-        2. 原图高清裁切 (+2px Padding)
-        3. 批量 REC 多语种识别
-        4. 双采样色彩提取与笔画填充率估算
-        5. BFS 连通图气泡聚类与拟声词隔离护盾
-        6. 输出全局绝对坐标 (box_abs) 与局部相对坐标 (box_rel)
+        单切片全流程处理核心管道 (优化纯净版):
+        1. DET 文本检测 (单次推理，提取候选框与置信度)
+        2. 极简几何绝对秒杀 (面积 < 60 或 短边 <= 3px: 灭除扫描微尘/细划痕，长句 100% 豁免)
+        3. 嵌套碎框抑制
+        4. 语种分支策略: 仅韩文 (kr/ko) 启用前置水平合并，英文 (en) 等禁用
+        5. 原图高清裁切 (+2px padding) 与批量 REC 识别
+        6. 后过滤双置信度决断: 过滤掉 clean_text 为空或 rec_score < 0.60 的假字符
+        7. 边界环众数精准取色与自然几何聚类
         """
         orig_h, orig_w = image.shape[:2]
         engine = self.get_engine(lang)
 
-        # 1. 文本检测 (单次卷积推理)
-        det_boxes, _ = engine.text_det(image)
-        if det_boxes is None or len(det_boxes) == 0:
+        # 1. 文本检测 (直接获取原始框与置信度)
+        det = engine.text_det
+        ori_shape = (orig_h, orig_w)
+        det_prep = det.get_preprocess(max(orig_h, orig_w))
+        pre_img = det_prep(image)
+        if pre_img is None:
             return []
 
-        # 提取水平对齐包围盒 [bx1, by1, bx2, by2] 并执行 DET 尺寸与噪点硬过滤
+        preds = det.infer(pre_img)[0]
+        dt_boxes, dt_scores = det.postprocess_op(preds, ori_shape)
+        dt_boxes = det.filter_tag_det_res(dt_boxes, ori_shape)
+        if dt_boxes is None or len(dt_boxes) == 0:
+            return []
+
+        # 2. 极简尺寸绝对过滤 (不设长宽比上限，长句 100% 安全存活)
         raw_boxes = []
-        for b in det_boxes:
+        for idx, b in enumerate(dt_boxes):
             xs = [p[0] for p in b]
             ys = [p[1] for p in b]
             bx1 = max(0, int(round(min(xs))))
@@ -244,21 +283,29 @@ class OcrEngineManager:
             bw = bx2 - bx1
             bh = by2 - by1
 
-            # DET 硬过滤: 滤除过小噪点斑块及极端畸变线条 (杜绝背景噪点被误识为 'o', '口', '0')
-            if (bw < 12 and bh < 12) or (bw * bh < 150):
+            # 仅拦截微小微粒 (面积 < 60 或 宽高均 < 8px)
+            if (bw < 8 and bh < 8) or (bw * bh < 60):
                 continue
-            if (bw / max(1, bh) > 15.0) or (bh / max(1, bw) > 15.0):
+            # 仅拦截绝对极细划痕 (厚度 <= 3px)
+            if min(bw, bh) <= 3:
                 continue
 
             raw_boxes.append([bx1, by1, bx2, by2])
 
-        # 内部嵌套冗余碎框滤除 (避免大框内部细碎标点/噪点产生冗余框)
+        if not raw_boxes:
+            return []
+
+        # 3. 内部嵌套冗余碎框滤除
         dedup_boxes = suppress_contained_boxes(raw_boxes, containment_thresh=0.75)
 
-        # 前置同行碎框水平融合
-        fused_boxes = merge_horizontal_boxes(dedup_boxes, y_overlap_ratio=0.50, max_gap_ratio=1.5, max_h_diff=1.8)
+        # 4. 语种分支策略: 仅韩文启用前置碎框横向融合；英文等西文直接禁用
+        is_korean = lang and lang.strip().lower() in ["kr", "ko", "korean"]
+        if is_korean:
+            fused_boxes = merge_horizontal_boxes(dedup_boxes, y_overlap_ratio=0.50, max_gap_ratio=1.5, max_h_diff=1.8)
+        else:
+            fused_boxes = dedup_boxes
 
-        # 2. 从未经下采样模糊的原图上高保真裁切 (+2px padding)
+        # 5. 原图高清裁切 (+2px padding)
         crops = []
         box_coords = []
         pad = 2
@@ -267,28 +314,35 @@ class OcrEngineManager:
             cby1 = max(0, by1 - pad)
             cbx2 = min(orig_w, bx2 + pad)
             cby2 = min(orig_h, by2 + pad)
-            if (cbx2 - cbx1) >= 5 and (cby2 - cby1) >= 5:
+            if (cbx2 - cbx1) >= 4 and (cby2 - cby1) >= 4:
                 crops.append(image[cby1:cby2, cbx1:cbx2])
                 box_coords.append([cbx1, cby1, cbx2, cby2])
 
         if not crops:
             return []
 
-        # 3. 批量文本行识别
+        # 6. 批量文本行识别
         rec_results, _ = engine.text_rec(crops)
 
-        # 4. 双采样色彩提取与特征计算
+        # 7. 后过滤逻辑: REC 置信度 >= 0.60 决断过滤
         text_line_items: List[TextLineItem] = []
-        for i, (text, score) in enumerate(rec_results):
-            score = float(score)
-            if score < 0.50 or not text.strip():
+        for i, (text, rec_score) in enumerate(rec_results):
+            rec_score = float(rec_score)
+            clean_text = text.strip()
+
+            # 文本必须有效且 REC 置信度达到黄金线 0.60
+            if not clean_text or rec_score < 0.60:
                 continue
+
             bbox = box_coords[i]
             bg_hex, text_hex = extract_colors_fast(image, tuple(bbox))
             fr = compute_fill_ratio(image, tuple(bbox))
-            text_line_items.append(TextLineItem(bbox, text, score, bg_hex, text_hex, fr))
+            text_line_items.append(TextLineItem(bbox, clean_text, rec_score, bg_hex, text_hex, fr))
 
-        # 5. BFS 连通图聚类合并气泡并执行物理决策打标
+        if not text_line_items:
+            return []
+
+        # 8. BFS 连通图聚类合并气泡并执行物理决策打标
         bubbles = cluster_text_lines(text_line_items, image=image, start_y=start_y)
         return bubbles
 

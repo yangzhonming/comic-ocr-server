@@ -3,7 +3,7 @@ from typing import List, Dict, Any, Optional, Tuple
 import cv2
 import numpy as np
 from app.schemas import BubbleItem
-from app.styling import estimate_font_weight
+from app.styling import estimate_font_weight, extract_colors_fast
 
 
 def classify_bubble_role(
@@ -14,16 +14,21 @@ def classify_bubble_role(
     avg_fill_ratio: float,
     bg_hex: str,
     fg_hex: str,
-    text: str
+    text: str,
+    purity: Any = 1.0
 ) -> Tuple[str, bool]:
     """
     分层短路物理特征决策树 (Short-Circuit Physical Decision Tree):
     精准区分正规对白气泡(dialogue)、画外音(narration)与拟声词幽灵框(sfx_ghost)。
     核心判据：
-    1. 4-角块自适应方差与背景色一致性 (彻底根除由于标点符号/边缘紧贴导致的整圈方差失真)
-    2. 气泡底色物理特征 (白底黑字、黑底白字心理话、淡彩浅色气泡)
-    3. 前景与背景高对比度判定
-    4. 彻底废除按字数 >= 6 强行归类为旁白以及 <= 2 强行归类为拟声词的古板规则
+    1. 四周环取色纯净度与平滑渐变保护护盾 (Border Ring Purity & Gradient Shield):
+       - 纯色气泡 (Top1 >= 45%): 允许进入常规 dialogue 判定
+       - 平滑渐变气泡 (Top3 >= 60% 且 颜色桶 <= 30): 判定为平滑渐变底色气泡容器，严禁误杀为拟声词！
+       - 杂乱插画背景 (Top1 < 45% 且 Top3 < 60% 或 颜色桶 > 30): 100% 确认印在原画特效中，
+         一票剥夺正规 dialogue 实心补丁资格，依字长与尺度精准归流至 sfx_ghost (幽灵点读) 或 narration (透明描边)。
+    2. 4-角块自适应方差与背景色一致性
+    3. 气泡底色物理特征 (白底黑字、黑底白字心理话、淡彩浅色气泡)
+    4. 前景与背景高对比度判定
     单框计算耗时 < 0.2ms，跨语言通用。
     返回: (role, is_ghost)
     """
@@ -33,6 +38,27 @@ def classify_bubble_role(
     h_img, w_img = image.shape[:2]
     bx, by, bw, bh = bubble_box
     clean_text = text.replace('\n', '').strip()
+
+    # 移动端 390 宽度的 8.5% 标尺换算切片标准行高
+    h_std = w_img * 0.085
+    height_ratio = avg_line_h / max(1.0, h_std)
+
+    # 解析背景纯度与杂乱度 (兼容 dict 或 float)
+    if isinstance(purity, dict):
+        is_messy = purity.get("is_messy", False)
+        top1_purity = purity.get("top1", 1.0)
+    else:
+        top1_purity = float(purity)
+        is_messy = (top1_purity < 0.50)
+
+    # === 【首要核心判据】四周环纯净度与插画杂乱护盾 ===
+    # 若被判定为杂乱插画背景 (非纯色且非平滑渐变)，坚决剥夺常规对话框 (dialogue) 资格，杜绝前端大补丁
+    if is_messy:
+        # 短词/招式名/拟声词 (字符数 <= 15 或相对字高较大) -> 幽灵框 (默认零遮盖透明，悬停点读)
+        if len(clean_text) <= 15 or height_ratio > 1.2:
+            return "sfx_ghost", True
+        # 复杂画面上的叙事长句 -> 画外音/旁白 (透明底 + 高反差双描边字，保全原画)
+        return "narration", False
 
     def _hex_to_lum_sat(hex_str: str) -> Tuple[float, float]:
         c = hex_str.lstrip('#')
@@ -76,21 +102,17 @@ def classify_bubble_role(
     is_pastel_bubble = (bg_lum >= 160.0 and bg_sat <= 70.0)
     is_speech_bubble_color = (is_light_bubble or is_dark_bubble or is_pastel_bubble)
 
-    # 移动端 390 宽度的 8.5% 标尺换算切片标准行高
-    h_std = w_img * 0.085
-    height_ratio = avg_line_h / max(1.0, h_std)
-
     # Layer 1: 【一票肯定权】标准对白气泡判定 (Bubble Immersion)
     # 只要符合气泡底色特征且图文有良好对比度:
     if is_speech_bubble_color and contrast >= 35.0:
-        # 1. 至少 2 个角落平整纯净并与底色一致 -> 绝大多数正规气泡
-        if num_matching_flat >= 2:
+        # 1. 至少 2 个角落平整纯净并与底色一致且非杂乱插画 -> 绝大多数正规气泡
+        if num_matching_flat >= 2 and not is_messy:
             return "dialogue", False
-        # 2. 至少 1 个角落平整且是多行或多字对白 -> 异形/椭圆紧凑对白气泡
-        if num_matching_flat >= 1 and (lines_count >= 2 or len(clean_text) >= 4):
+        # 2. 至少 1 个角落平整且是多行或多字对白且非杂乱插画 -> 异形/椭圆紧凑对白气泡
+        if num_matching_flat >= 1 and not is_messy and (lines_count >= 2 or len(clean_text) >= 4):
             return "dialogue", False
         # 3. 极高明度纯白背景 (底色 >= 220 纯白画布) 且有多字文本 -> 必定为对话气泡
-        if bg_lum >= 220.0 and bg_sat <= 25.0 and (lines_count >= 2 or len(clean_text) >= 3):
+        if bg_lum >= 220.0 and bg_sat <= 25.0 and not is_messy and (lines_count >= 2 or len(clean_text) >= 3):
             return "dialogue", False
 
     # Layer 2: 【一票否决权】拟声词/环境字检测 (SFX Ghost)
@@ -109,7 +131,7 @@ def classify_bubble_role(
     # 4. 背景杂乱 (无任何平滑纯色角落，说明直接绘制在插画/画面上)
     if num_matching_flat == 0 and cvars and min(cvars) > 80.0:
         # 短词/拟声词直接进入幽灵框
-        if len(clean_text) <= 4:
+        if len(clean_text) <= 15:
             return "sfx_ghost", True
         # 复杂画面上的中性长句 -> 画外音/旁白 (保全原画)
         return "narration", False
@@ -149,47 +171,76 @@ class TextLineItem:
         self.fill_ratio = fill_ratio
 
 
-def should_merge(a: TextLineItem, b: TextLineItem, x_overlap_ratio: float = 0.2) -> bool:
-    """
-    判断两个文本行是否属于同一个漫画对话气泡
-    内置拟声词隔离护盾 (Anti-SFX Shield)
-    """
-    # 拟声词护盾：如果两行高度相差 2.2 倍以上，绝非同一段对白，严禁合并
-    h_ratio = max(a.h, b.h) / max(min(a.h, b.h), 1)
-    if h_ratio > 2.2:
-        return False
+def get_box_dims(item: Any) -> Tuple[int, int, int, int]:
+    if hasattr(item, "x"):
+        return item.x, item.y, item.w, item.h
+    if isinstance(item, dict):
+        return int(item["x"]), int(item["y"]), int(item["w"]), int(item["h"])
+    raise TypeError(f"Unsupported item type: {type(item)}")
 
-    local_char_size = min(a.h, b.h)
+
+def should_merge_detailed(
+    a: Any,
+    b: Any,
+    x_overlap_ratio: float = 0.2,
+    horizontal_gap_ratio: float = 2.0,
+    horizontal_center_tol: float = 0.6,
+    sfx_height_ratio: float = 2.2,
+    vertical_gap_ratio: float = 1.3,
+    fragment_gap_ratio: float = 0.60
+) -> Tuple[bool, str]:
+    """
+    判断两个文本行是否属于同一个漫画对话气泡 (详细返回判定理由)
+    内置拟声词隔离护盾 (Anti-SFX Shield) 与非对称孤立碎片间距约束
+    """
+    ax, ay, aw, ah = get_box_dims(a)
+    bx, by, bw, bh = get_box_dims(b)
+
+    # 拟声词隔离护盾：如果两行高度相差过大，严禁合并
+    h_ratio = max(ah, bh) / max(min(ah, bh), 1)
+    if h_ratio > sfx_height_ratio:
+        return False, f"sfx_shield_blocked (h_ratio={h_ratio:.2f} > {sfx_height_ratio})"
+
+    local_char_size = min(ah, bh)
     if local_char_size <= 0:
-        return False
+        return False, "zero_char"
 
-    a_bottom = a.y + a.h
-    b_bottom = b.y + b.h
-    center_y_a = a.y + a.h / 2.0
-    center_y_b = b.y + b.h / 2.0
-    h_gap = max(a.x, b.x) - min(a.x + a.w, b.x + b.w)
-    v_gap = max(a.y, b.y) - min(a_bottom, b_bottom)
+    a_bottom = ay + ah
+    b_bottom = by + bh
+    center_y_a = ay + ah / 2.0
+    center_y_b = by + bh / 2.0
+    h_gap = max(ax, bx) - min(ax + aw, bx + bw)
+    v_gap = max(ay, by) - min(a_bottom, b_bottom)
 
     # 规则 A：同行横向合并 (水平排列且中心 Y 轴非常接近)
-    if abs(center_y_a - center_y_b) < local_char_size * 0.6:
-        if h_gap < local_char_size * 2.0:
-            return True
+    if abs(center_y_a - center_y_b) < local_char_size * horizontal_center_tol:
+        # 非对称碎片间距保护：若任一方为超短孤立碎片 (单字/拟声词，宽 < 1.3H)，限制其横向跨距
+        is_tiny_fragment = min(aw, bw) < local_char_size * 1.3
+        effective_h_gap = local_char_size * (fragment_gap_ratio if is_tiny_fragment else horizontal_gap_ratio)
+        if h_gap < effective_h_gap:
+            return True, "rule_a_horizontal"
+        elif is_tiny_fragment:
+            return False, f"rule_a_fragment_gap_rejected (h_gap={h_gap:.1f} >= {effective_h_gap:.1f})"
 
     # 规则 B：同气泡纵向换行合并
-    x_overlap = max(0, min(a.x + a.w, b.x + b.w) - max(a.x, b.x))
-    is_x_overlapped = (x_overlap > min(a.w, b.w) * x_overlap_ratio) or (x_overlap > local_char_size)
+    x_overlap = max(0, min(ax + aw, bx + bw) - max(ax, bx))
+    is_x_overlapped = (x_overlap > min(aw, bw) * x_overlap_ratio) or (x_overlap > local_char_size)
 
     if is_x_overlapped:
         if v_gap <= 0:
-            # 存在垂直重叠，检查中心 Y 是否在合理邻近范围
-            if abs(center_y_a - center_y_b) < max(a.h, b.h) * 1.3:
-                return True
-            return False
-        # 纵向间距小于 1.3 倍字高
-        if v_gap < local_char_size * 1.3:
-            return True
+            if abs(center_y_a - center_y_b) < max(ah, bh) * vertical_gap_ratio:
+                return True, "rule_b_overlap_line"
+            return False, "rule_b_center_distance_too_large"
+        if v_gap < local_char_size * vertical_gap_ratio:
+            return True, "rule_b_vertical_line"
 
-    return False
+    return False, "disjoint"
+
+
+def should_merge(a: TextLineItem, b: TextLineItem, x_overlap_ratio: float = 0.2) -> bool:
+    """生产环境轻量调用入口，直接复用 should_merge_detailed"""
+    can_merge, _ = should_merge_detailed(a, b, x_overlap_ratio=x_overlap_ratio)
+    return can_merge
 
 
 def cluster_text_lines(
@@ -277,16 +328,23 @@ def cluster_text_lines(
         box_rel = [min_x, min_y, w, h]
         box_abs = [min_x, min_y + start_y, w, h]
 
-        # 计算主导背景色与文字色（按文本长度加权投票）
-        bg_counter = Counter()
-        fg_counter = Counter()
-        for item in component:
-            weight = max(1, len(item.text))
-            bg_counter[item.bg_color] += weight
-            fg_counter[item.text_color] += weight
-
-        bg_color = bg_counter.most_common(1)[0][0]
-        fg_color = fg_counter.most_common(1)[0][0]
+        # 气泡大框最终精准取色与纯净度评估:
+        # 若存在图像原图，直接在整个气泡大包围盒上进行环绕一周边界环众数提取 (Border Ring Mode)
+        # 并返回边界环色彩纯净度 (purity)，压倒性消除局部黑边线干扰；若无图像则回退至成员投票
+        if image is not None:
+            bg_color, fg_color, purity = extract_colors_fast(
+                image, (min_x, min_y, max_x, max_y), return_purity=True
+            )
+        else:
+            bg_counter = Counter()
+            fg_counter = Counter()
+            for item in component:
+                weight = max(1, len(item.text))
+                bg_counter[item.bg_color] += weight
+                fg_counter[item.text_color] += weight
+            bg_color = bg_counter.most_common(1)[0][0]
+            fg_color = fg_counter.most_common(1)[0][0]
+            purity = 1.0
 
         # 估算平均字号与字重
         avg_line_h = sum(item.h for item in component) / len(component)
@@ -306,7 +364,8 @@ def cluster_text_lines(
             avg_fill_ratio=avg_fill_ratio,
             bg_hex=bg_color,
             fg_hex=fg_color,
-            text=merged_text
+            text=merged_text,
+            purity=purity
         )
 
         bubbles.append(
