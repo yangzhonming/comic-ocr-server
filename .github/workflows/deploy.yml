@@ -6,7 +6,6 @@ on:
       - main
   workflow_dispatch:
 
-# 核心优化：每次新提交自动停止/取消正在运行的旧构建
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -53,6 +52,9 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
+          # 关键兼容：阿里云 ACR 个人版不支持 OCI 1.1 证明元数据，必须禁用 provenance 与 sbom
+          provenance: false
+          sbom: false
           tags: |
             crpi-adr7aw7fhazomgpo.cn-shenzhen.personal.cr.aliyuncs.com/byd123/comic:v2
             crpi-adr7aw7fhazomgpo.cn-shenzhen.personal.cr.aliyuncs.com/byd123/comic:latest
