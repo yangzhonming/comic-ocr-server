@@ -22,8 +22,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: crpi-adr7aw7fhazomgpo.cn-shenzhen.personal.cr.aliyuncs.com
-          username: ${{ secrets.ALIYUN_ACR_USERNAME }}
-          password: ${{ secrets.ALIYUN_ACR_PASSWORD }}
+          username: ${{ secrets.ALIYUN_ACR_USERNAME || vars.ALIYUN_ACR_USERNAME || secrets.DOCKER_USERNAME || vars.DOCKER_USERNAME }}
+          password: ${{ secrets.ALIYUN_ACR_PASSWORD || vars.ALIYUN_ACR_PASSWORD || secrets.DOCKER_PASSWORD || vars.DOCKER_PASSWORD }}
 
       - name: 高性能构建并推送镜像至阿里云
         uses: docker/build-push-action@v5
@@ -34,6 +34,6 @@ jobs:
           tags: |
             crpi-adr7aw7fhazomgpo.cn-shenzhen.personal.cr.aliyuncs.com/byd123/comic:v2
             crpi-adr7aw7fhazomgpo.cn-shenzhen.personal.cr.aliyuncs.com/byd123/comic:latest
-          # 启用 GitHub Actions 官方免费层级缓存 (极速秒级构建)
+          # 启用 GitHub Actions 官方免费层级缓存
           cache-from: type=gha
           cache-to: type=gha,mode=max
