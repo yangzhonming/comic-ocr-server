@@ -241,7 +241,7 @@ flowchart TD
 * **部署服务**：阿里云函数计算 3.0 (Function Compute 3.0)
 * **计算架构**：Serverless 弹性实例 (Linux x86_64 / amd64)
 * **运行时环境**：Custom Container (自定义镜像)
-* **镜像仓库**：阿里云深圳容器镜像服务 ACR 个人版 (`crpi-adr7aw7fhazomgpo.cn-shenzhen.personal.cr.aliyuncs.com/byd123/comic:v2`)
+* **镜像仓库**：阿里云深圳容器镜像服务 ACR 个人版 (`crpi-xxxx.cn-shenzhen.personal.cr.aliyuncs.com/<namespace>/comic:v2`)
 * **镜像体积**：225.71 MB
 * **硬件规格配置**：
   * **vCPU**：1.5 vCPU ~ 2.0 vCPU
@@ -291,14 +291,14 @@ flowchart TD
 ### 2. 后端 OCR 服务本地运行 (Docker)
 ```bash
 # 1. 登录阿里云深圳镜像仓库
-docker login --username=<your-username> crpi-adr7aw7fhazomgpo.cn-shenzhen.personal.cr.aliyuncs.com
+docker login --username=<your-username> crpi-xxxx.cn-shenzhen.personal.cr.aliyuncs.com
 
 # 2. 拉取最新优化版 v2 镜像
-docker pull crpi-adr7aw7fhazomgpo.cn-shenzhen.personal.cr.aliyuncs.com/byd123/comic:v2
+docker pull crpi-xxxx.cn-shenzhen.personal.cr.aliyuncs.com/<namespace>/comic:v2
 
 # 3. 本地启动服务 (映射 8000 端口)
 docker run -d --name comic-ocr-server -p 8000:8000 \
-  crpi-adr7aw7fhazomgpo.cn-shenzhen.personal.cr.aliyuncs.com/byd123/comic:v2
+  crpi-xxxx.cn-shenzhen.personal.cr.aliyuncs.com/<namespace>/comic:v2
 
 # 4. 健康检查测试
 curl http://127.0.0.1:8000/health
@@ -307,7 +307,7 @@ curl http://127.0.0.1:8000/health
 
 ### 3. 阿里云函数计算 FC 3.0 部署
 1. 在阿里云函数计算控制台创建服务，运行环境选择 **“自定义容器镜像 (Custom Container)”**；
-2. 镜像地址填写：`crpi-adr7aw7fhazomgpo.cn-shenzhen.personal.cr.aliyuncs.com/byd123/comic:v2`；
+2. 镜像地址填写：`crpi-xxxx.cn-shenzhen.personal.cr.aliyuncs.com/<namespace>/comic:v2`；
 3. 容器监听端口设置为 **`8000`**；
 4. 实例规格推荐：`1.5 vCPU`，`1024 MB` 内存；
 5. 开启公网访问域名，将生成的 URL（如 `https://comic-ocr-xxxx.cn-shenzhen.fcapp.run`）填入插件设置即可实现全球公网直连汉化。
