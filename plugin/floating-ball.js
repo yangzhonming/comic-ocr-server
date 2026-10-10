@@ -541,7 +541,8 @@
 
           <!-- 选项卡导航 -->
           <div class="modal-tabs">
-            <button class="modal-tab-btn active" data-tab="models">🤖 模型管理</button>
+            <button class="modal-tab-btn active" data-tab="models">🤖 大模型配置</button>
+            <button class="modal-tab-btn" data-tab="ocr">⚡ OCR 服务设置</button>
             <button class="modal-tab-btn" data-tab="corpus">📖 语料库 (预留)</button>
             <button class="modal-tab-btn" data-tab="errors">⚠️ 错误信息与诊断 <span id="modal-error-badge" style="background:rgba(239,68,68,0.2); color:#f87171; font-size:10px; padding:1px 5px; border-radius:10px; display:none;">0</span></button>
           </div>
@@ -555,6 +556,31 @@
                 <button id="btn-add-provider" style="background:#2ed573; color:#0b1e13; font-weight:700; border:none; padding:4px 10px; border-radius:6px; font-size:11px; cursor:pointer;">+ 添加平台</button>
               </div>
               <div id="modal-providers-container" style="display:flex; flex-direction:column; gap:10px;"></div>
+            </div>
+
+            <!-- Tab: OCR 服务设置 -->
+            <div id="tab-pane-ocr" style="display:none; flex-direction:column; gap:12px;">
+              <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); padding:10px; border-radius:10px; color:#94a3b8; font-size:11px; line-height:1.5;">
+                ⚡ <strong>OCR 推理引擎配置</strong>：支持自建云端 Serverless 函数计算 (Aliyun FC / Tencent SCF) 或本地 Python OCR 服务。
+              </div>
+              <div class="provider-card">
+                <span class="form-label">云端 OCR 接口地址 (API Endpoint)</span>
+                <input type="text" id="modal-ocr-cloud-url" class="input-text" placeholder="https://<your-fc-endpoint>.cn-shenzhen.fcapp.run" style="font-family:monospace; font-size:11px;">
+                <div style="font-size:10px; color:#64748b; margin-top:4px;">例如阿里云函数计算公网触发器 URL。请勿公开分享您的私有 Endpoint。</div>
+              </div>
+              <div class="provider-card">
+                <span class="form-label">运行模式偏好</span>
+                <div style="display:flex; gap:16px; margin-top:6px;">
+                  <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:#f8fafc; cursor:pointer;">
+                    <input type="radio" name="modal-ocr-mode" value="cloud" id="radio-mode-cloud" style="accent-color:#2ed573;">
+                    ☁️ 云端 Serverless (推荐)
+                  </label>
+                  <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:#f8fafc; cursor:pointer;">
+                    <input type="radio" name="modal-ocr-mode" value="local" id="radio-mode-local" style="accent-color:#2ed573;">
+                    💻 本地服务 (127.0.0.1:8000)
+                  </label>
+                </div>
+              </div>
             </div>
 
             <!-- Tab 2: 语料库预留 -->
@@ -812,6 +838,7 @@
         btn.classList.add('active');
         const tab = btn.dataset.tab;
         shadow.getElementById('tab-pane-models').style.display = tab === 'models' ? 'flex' : 'none';
+        shadow.getElementById('tab-pane-ocr').style.display = tab === 'ocr' ? 'flex' : 'none';
         shadow.getElementById('tab-pane-corpus').style.display = tab === 'corpus' ? 'flex' : 'none';
         shadow.getElementById('tab-pane-errors').style.display = tab === 'errors' ? 'flex' : 'none';
       });
@@ -858,6 +885,16 @@
     try {
       const draft = localStorage.getItem('comic_corpus_draft') || '';
       shadow.getElementById('modal-corpus-draft').value = draft;
+      const cloudUrl = localStorage.getItem('comic_cloud_api_url') || '';
+      const ocrInput = shadow.getElementById('modal-ocr-cloud-url');
+      if (ocrInput) ocrInput.value = cloudUrl;
+      const isLocal = localStorage.getItem('comic_dev_enable_capture') === '1';
+      const radLocal = shadow.getElementById('radio-mode-local');
+      const radCloud = shadow.getElementById('radio-mode-cloud');
+      if (radLocal && radCloud) {
+        radLocal.checked = isLocal;
+        radCloud.checked = !isLocal;
+      }
     } catch {}
   }
 
@@ -870,6 +907,11 @@
     // 保存语料库草稿
     const draft = shadow.getElementById('modal-corpus-draft').value;
     try { localStorage.setItem('comic_corpus_draft', draft); } catch {}
+    // 保存云端 OCR 地址与模式
+    const cloudUrl = shadow.getElementById('modal-ocr-cloud-url')?.value?.trim() || '';
+    try { localStorage.setItem('comic_cloud_api_url', cloudUrl); } catch {}
+    const isLocal = shadow.getElementById('radio-mode-local')?.checked;
+    try { localStorage.setItem('comic_dev_enable_capture', isLocal ? '1' : '0'); } catch {}
   }
 
   // 渲染厂商列表

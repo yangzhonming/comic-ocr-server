@@ -1,8 +1,8 @@
 (() => {
   // 漫画页序预览与切片协调器。图像/坐标/切线计算由 slicing/ 模块负责。
-  const CLOUD_API = 'https://comic-ocr-xxxx.cn-shenzhen.fcapp.run';
+  const CLOUD_API = '';
   const DEFAULT_LOCAL_API = 'http://127.0.0.1:8000';
-  let API = CLOUD_API;
+  let API = '';
 
   function getEffectiveApi() {
     try {
@@ -13,8 +13,12 @@
       if (isLocal) {
         return 'http://127.0.0.1:8000';
       }
+      const customCloud = typeof localStorage !== 'undefined' && localStorage.getItem('comic_cloud_api_url');
+      if (customCloud && customCloud.trim()) {
+        return customCloud.trim().replace(/\/+$/, '');
+      }
     } catch {}
-    return CLOUD_API;
+    return CLOUD_API || 'http://127.0.0.1:8000';
   }
 
   const MIN_WIDTH_RATIO = 0.68;
@@ -530,8 +534,8 @@
       left: offset.left,
       top: offset.top + ratio * offset.height,
       width: offset.width,
-      scaleX: offset.width / page.sourceWidth,
-      scaleY: offset.height / page.sourceHeight
+      scaleX: offset.width / coordinateIndex.width,
+      scaleY: offset.height / page.height
     };
   }
 
@@ -1493,6 +1497,22 @@
     }
     API = getEffectiveApi();
     const isLocal = API.includes('127.0.0.1');
+    const customCloud = typeof localStorage !== 'undefined' ? (localStorage.getItem('comic_cloud_api_url') || '') : '';
+    if (!isLocal && !customCloud.trim() && !CLOUD_API) {
+      starting = false;
+      abortController = null;
+      statusText = '未配置云端 OCR 接口地址，请在设置中配置';
+      if (globalThis.ComicErrorTracker) {
+        globalThis.ComicErrorTracker.record({
+          type: '配置缺失',
+          sliceTag: '前置检查',
+          detail: '未检测到云端 OCR 接口地址。请点击悬浮球设置 -> OCR 服务设置，填入您的云端 API Endpoint，或在 Dev HUD 中开启本地模式。'
+        });
+      }
+      notify();
+      alert('【配置提示】未配置云端 OCR 服务地址！\n请点击悬浮球「⚙️ 设置 -> ⚡ OCR 服务设置」填入 API Endpoint，或在 Dev 面板开启本地模式。');
+      return;
+    }
     statusText = isLocal ? `正在连接本地 OCR 服务 (${API})...` : '正在连接云端 OCR 引擎...';
     notify();
     try {

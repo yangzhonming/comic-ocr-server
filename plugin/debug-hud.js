@@ -135,6 +135,10 @@
             <input type="checkbox" id="chk-enable-capture" style="accent-color:#38bdf8;">
             <span style="color:#f8fafc;font-weight:600;">💻 优先使用本地 OCR (127.0.0.1:8000)</span>
           </label>
+          <div id="container-cloud-ocr-url" style="margin-bottom:8px;">
+            <div style="font-size:10px;color:#94a3b8;margin-bottom:2px;">☁️ 云端 OCR 服务地址:</div>
+            <input type="text" id="input-cloud-ocr-url" placeholder="https://<your-fc-endpoint>.cn-shenzhen.fcapp.run" style="width:100%;box-sizing:border-box;background:rgba(15,23,42,0.9);border:1px solid rgba(56,189,248,0.3);border-radius:4px;color:#f8fafc;padding:3px 6px;font-size:10px;font-family:monospace;outline:none;">
+          </div>
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;font-size:11px;color:#94a3b8;background:rgba(30,41,59,0.6);padding:4px 8px;border-radius:6px;">
             <span>识别语种:</span>
             <select id="select-ocr-lang" style="background:rgba(15,23,42,0.9);border:1px solid rgba(56,189,248,0.4);border-radius:4px;color:#38bdf8;padding:2px 6px;font-size:11px;font-family:inherit;outline:none;cursor:pointer;">
@@ -160,7 +164,10 @@
         <div class="section" id="section-telemetry" style="border-top:1px solid rgba(148,163,184,0.2);padding-top:8px;">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
             <div class="section-title" style="margin:0;">⚡ 耗时与数据包透视</div>
-            <button id="btn-copy-latest-pkt" class="btn-action" style="padding:1px 6px;font-size:10px;">📋 复制报文</button>
+            <div style="display:flex;gap:4px;">
+              <button id="btn-export-json-file" class="btn-action" style="padding:1px 6px;font-size:10px;border-color:rgba(46,213,115,0.4);background:rgba(46,213,115,0.15);color:#2ed573;">💾 导出文件</button>
+              <button id="btn-copy-latest-pkt" class="btn-action" style="padding:1px 6px;font-size:10px;">📋 复制报文</button>
+            </div>
           </div>
           <div style="display:flex;gap:6px;margin-bottom:6px;">
             <div class="stat-item" style="flex:1;"><span class="stat-label">⏱️ OCR 耗时</span><span class="stat-val highlight" id="val-ocr-time">-- ms</span></div>
@@ -196,7 +203,29 @@
         alert(`已成功复制压测报告 JSON！\n共记录 ${report.slices_timeline.length} 个切片\n模式: ${report.benchmark_summary.test_mode}\n平均 OCR 耗时: ${report.benchmark_summary.avg_ocr_duration_ms}ms\n平均 LLM 耗时: ${report.benchmark_summary.avg_llm_duration_ms}ms`);
       }).catch(() => {});
     });
+    root.querySelector('#btn-export-json-file').addEventListener('click', () => {
+      const report = PacketInspector.getFullReport();
+      if (!report.slices_timeline.length) return alert('暂无切片报文记录');
+      try {
+        const jsonStr = JSON.stringify(report, null, 2);
+        const blob = new Blob([jsonStr], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        a.href = url;
+        a.download = `comic-benchmark-${report.benchmark_summary.test_mode.includes('云端') ? 'cloud' : 'local'}-${timestamp}.json`;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }, 100);
+      } catch (err) {
+        alert('导出失败: ' + (err?.message || String(err)));
+      }
+    });
     const captureChk = root.querySelector('#chk-enable-capture');
+    const cloudUrlInput = root.querySelector('#input-cloud-ocr-url');
     const langSelect = root.querySelector('#select-ocr-lang');
 
     const captureVal = typeof localStorage !== 'undefined' ? localStorage?.getItem?.('comic_dev_enable_capture') : null;
@@ -207,6 +236,16 @@
       localStorage.setItem('comic_dev_enable_capture', captureChk.checked ? '1' : '0');
       console.log(`[ComicDebug] 本地模式: ${captureChk.checked ? '已启用 (127.0.0.1:8000)' : '已停用 (云端)'}`);
     });
+
+    if (cloudUrlInput) {
+      cloudUrlInput.value = (typeof localStorage !== 'undefined' ? localStorage.getItem('comic_cloud_api_url') : '') || '';
+      cloudUrlInput.addEventListener('change', () => {
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem('comic_cloud_api_url', cloudUrlInput.value.trim());
+          console.log(`[ComicDebug] 云端 OCR 地址已更新: ${cloudUrlInput.value.trim()}`);
+        }
+      });
+    }
 
     if (langSelect) {
       langSelect.value = getOcrLang();
