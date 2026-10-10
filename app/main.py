@@ -16,8 +16,8 @@ async def lifespan(app: FastAPI):
     print("[ComicServer] 正在预热 ONNX Runtime 引擎...")
     # 限制 OpenCV 内部线程数为 1，避免高并发裁切时的 CPU 上下文切换争抢
     cv2.setNumThreads(1)
-    print("[ComicServer] 正在预热 ONNX Runtime 引擎 (韩/英/日)...")
-    warmed = engine_manager.warmup(["kr", "en", "ja"])
+    print("[ComicServer] 正在预热 ONNX Runtime 引擎 (韩/英/日/俄)...")
+    warmed = engine_manager.warmup(["kr", "en", "ja", "ru"])
     print(f"[ComicServer] 引擎预热完成，已激活语种: {warmed}")
     yield
     print("[ComicServer] 服务关闭，释放资源。")

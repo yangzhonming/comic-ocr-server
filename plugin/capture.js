@@ -47,6 +47,7 @@
   let coordinateSnapshot = null;
   let completedSlices = [];
   let lockedSources = null;
+  let firstTranslationEmitted = false;
   let idCounter = 0;
   const ids = new WeakMap();
   const states = new WeakMap();
@@ -792,7 +793,11 @@
           { role: 'user', content: linesInput }
         ],
         stream: true,
-        temperature: 0.3
+        temperature: 0.3,
+        max_tokens: Math.max(100, translatableBubbles.length * 40),
+        thinking: {
+          type: 'disabled'
+        }
       };
 
       const res = await fetch(endpoint, {
@@ -882,6 +887,12 @@
             const targetBubble = translatableBubbles[id];
             targetBubble.translatedText = cleanTrans;
             updatePatchText(slice.sliceIndex, targetBubble, cleanTrans);
+            if (!firstTranslationEmitted) {
+              firstTranslationEmitted = true;
+              if (globalThis.ComicFloatingBallOnFirstTranslation) {
+                globalThis.ComicFloatingBallOnFirstTranslation();
+              }
+            }
           }
         } else if (currentBubbleId >= 0 && translatableBubbles[currentBubbleId]) {
           // LLM 内部换行续接处理，防止换行导致译文被截断
@@ -890,6 +901,12 @@
             const targetBubble = translatableBubbles[currentBubbleId];
             targetBubble.translatedText = (targetBubble.translatedText ? (targetBubble.translatedText + ' ') : '') + cleanCont;
             updatePatchText(slice.sliceIndex, targetBubble, targetBubble.translatedText);
+            if (!firstTranslationEmitted) {
+              firstTranslationEmitted = true;
+              if (globalThis.ComicFloatingBallOnFirstTranslation) {
+                globalThis.ComicFloatingBallOnFirstTranslation();
+              }
+            }
           }
         }
       };
@@ -1470,6 +1487,7 @@
       notify();
       return;
     }
+    firstTranslationEmitted = false;
     starting = true;
     statusText = '正在扫描并预加载漫画图片...';
     notify();
@@ -1667,6 +1685,7 @@
 
   function stop() {
     if (!running && !starting) return;
+    firstTranslationEmitted = false;
     if (typeof window !== 'undefined') {
       window.removeEventListener('scroll', onScrollActivity);
       window.removeEventListener('scrollend', onScrollActivity);
@@ -1783,6 +1802,22 @@
 
   globalThis.ComicImageCapture = Object.freeze({
     setReader,
+    getReaderHtml() {
+      if (!reader?.root) return '';
+      return reader.root.outerHTML || '';
+    },
+    getReaderInfo() {
+      if (!reader?.root) return null;
+      return {
+        tagName: reader.root.tagName,
+        className: reader.root.className,
+        id: reader.root.id,
+        imageCount: entries.length,
+        childElementCount: reader.root.childElementCount,
+        clientWidth: reader.root.clientWidth,
+        clientHeight: reader.root.clientHeight
+      };
+    },
     toggle,
     start,
     stop,

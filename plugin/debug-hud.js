@@ -188,6 +188,19 @@
             <pre id="val-res-packet" style="margin:0;max-height:75px;overflow-y:auto;background:rgba(15,23,42,0.85);border:1px solid rgba(46,213,115,0.2);padding:6px;border-radius:4px;font-size:10px;color:#a7f3d0;white-space:pre-wrap;word-break:break-all;font-family:inherit;">(等待大模型响应...)</pre>
           </div>
         </div>
+        <div class="section" id="section-container-dom" style="border-top:1px solid rgba(148,163,184,0.2);padding-top:8px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+            <div class="section-title" style="margin:0;">📦 容器 DOM 捕获与分享</div>
+            <span id="label-container-info" style="font-size:10px;color:#38bdf8;">就绪待命</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:5px;">
+            <button id="btn-share-container-dom" class="btn-action" style="padding:5px 0;font-size:11px;border-color:rgba(37,211,102,0.5);background:rgba(37,211,102,0.18);color:#25d366;font-weight:700;">📤 分享容器到微信</button>
+            <div style="display:flex;gap:4px;">
+              <button id="btn-export-container-html" class="btn-action" style="flex:1;padding:3px 0;font-size:10px;border-color:rgba(56,189,248,0.4);background:rgba(14,165,233,0.15);color:#38bdf8;">💾 导出 HTML</button>
+              <button id="btn-copy-container-html" class="btn-action" style="flex:1;padding:3px 0;font-size:10px;">📋 复制容器代码</button>
+            </div>
+          </div>
+        </div>
       </div>
     `;
     root.querySelector('.close-btn').addEventListener('click', () => {
@@ -224,6 +237,81 @@
         alert('导出失败: ' + (err?.message || String(err)));
       }
     });
+
+    function getCapturedContainerHtml() {
+      const html = globalThis.ComicImageCapture?.getReaderHtml?.();
+      if (html && html.trim().length > 0) return html;
+      const fallbackEl = document.querySelector('.reading-content, #reader, .reader-container, .chapter-content, .viewer-cnt, #viewer, .comic-container');
+      if (fallbackEl) return fallbackEl.outerHTML;
+      return document.body ? document.body.innerHTML : '';
+    }
+
+    function triggerBlobDownload(blob, filename) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 100);
+    }
+
+    root.querySelector('#btn-share-container-dom').addEventListener('click', async () => {
+      const html = getCapturedContainerHtml();
+      if (!html) return alert('未找到漫画容器元素');
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const filename = `comic-container-${location.hostname}-${timestamp}.html`;
+      const fullDoc = `<!DOCTYPE html>\n<html>\n<head>\n  <meta charset="utf-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>Comic Container - ${location.hostname}</title>\n</head>\n<body>\n${html}\n</body>\n</html>`;
+      const blob = new Blob([fullDoc], { type: 'text/html' });
+      const file = new File([blob], filename, { type: 'text/html' });
+
+      if (typeof navigator !== 'undefined' && navigator.canShare && navigator.canShare({ files: [file] })) {
+        try {
+          await navigator.share({
+            title: `漫画容器代码 (${location.hostname})`,
+            text: `从 ${location.href} 捕获的漫画阅读器 HTML 容器结构`,
+            files: [file]
+          });
+          return;
+        } catch (err) {
+          if (err.name === 'AbortError') return;
+          console.warn('[ComicHUD] Web Share API 失败，降级为导出文件:', err);
+        }
+      }
+
+      triggerBlobDownload(blob, filename);
+      try {
+        await navigator.clipboard.writeText(`已生成容器代码文件: ${filename}，已保存至下载目录，可发送给开发者。`);
+        alert(`已生成并下载容器文件 [${filename}]！\n\n当前浏览器环境未直接弹出微信分享，文件已保存到本地下载文件夹，请在微信中选择发送。`);
+      } catch {
+        alert(`已生成并下载容器文件 [${filename}]！\n请在微信中选择发送。`);
+      }
+    });
+
+    root.querySelector('#btn-export-container-html').addEventListener('click', () => {
+      const html = getCapturedContainerHtml();
+      if (!html) return alert('未找到漫画容器元素');
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const filename = `comic-container-${location.hostname}-${timestamp}.html`;
+      const fullDoc = `<!DOCTYPE html>\n<html>\n<head>\n  <meta charset="utf-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>Comic Container - ${location.hostname}</title>\n</head>\n<body>\n${html}\n</body>\n</html>`;
+      const blob = new Blob([fullDoc], { type: 'text/html' });
+      triggerBlobDownload(blob, filename);
+    });
+
+    root.querySelector('#btn-copy-container-html').addEventListener('click', async () => {
+      const html = getCapturedContainerHtml();
+      if (!html) return alert('未找到漫画容器元素');
+      try {
+        await navigator.clipboard.writeText(html);
+        alert(`已成功复制容器 HTML 代码！(大小: ${(html.length / 1024).toFixed(1)} KB)\n可直接在微信中粘贴发送。`);
+      } catch (err) {
+        alert('复制到剪贴板失败: ' + (err?.message || String(err)));
+      }
+    });
+
     const captureChk = root.querySelector('#chk-enable-capture');
     const cloudUrlInput = root.querySelector('#input-cloud-ocr-url');
     const langSelect = root.querySelector('#select-ocr-lang');
@@ -336,6 +424,15 @@
     if (batchesEl) batchesEl.textContent = String(status.batchesCompleted || 0);
     if (pendingBatchEl) pendingBatchEl.textContent = String(status.pendingBatchCount || 0);
     statusEl.textContent = status.statusText || '准备就绪';
+    const containerLabel = root.querySelector('#label-container-info');
+    if (containerLabel) {
+      const info = globalThis.ComicImageCapture?.getReaderInfo?.();
+      if (info) {
+        containerLabel.textContent = `${info.tagName.toLowerCase()} (${info.imageCount}P)`;
+      } else {
+        containerLabel.textContent = status.count > 0 ? `${status.count}P` : '未捕获';
+      }
+    }
   }
 
   // ========================================================

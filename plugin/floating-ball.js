@@ -14,6 +14,7 @@
   let captureStatus = { running: false, stopping: false, previewEnabled: true, statusText: '准备就绪', count: 0, completed: 0 };
   let frame = 0;
   let resizeObserver = null;
+  let hasFirstTranslation = false;
 
   // ========================================================
   // 1. 错误捕获追踪器 (全局可用)
@@ -214,20 +215,35 @@
           outline: none;
           position: relative;
         }
-        /* 运行中：发光绿色光晕 */
-        .manga-ui-button.working {
-          box-shadow: 0 0 16px rgba(46, 213, 115, 0.75), inset 0 0 8px rgba(46, 213, 115, 0.25);
-          border-color: rgba(46, 213, 115, 0.6);
+        @keyframes ball-breathe {
+          0%, 100% {
+            box-shadow: 0 0 8px rgba(46, 213, 115, 0.4), inset 0 0 4px rgba(46, 213, 115, 0.2);
+            border-color: rgba(46, 213, 115, 0.4);
+            transform: scale(1);
+          }
+          50% {
+            box-shadow: 0 0 16px rgba(46, 213, 115, 0.8), 0 0 24px rgba(46, 213, 115, 0.3), inset 0 0 8px rgba(46, 213, 115, 0.35);
+            border-color: rgba(46, 213, 115, 0.8);
+            transform: scale(1.03);
+          }
         }
-        /* 运行/阅读时的隐身态 (0.18 透明度，悬停/触碰恢复 1) */
+        /* 运行中：发光绿色呼吸光晕 */
+        .manga-ui-button.working {
+          border-color: rgba(46, 213, 115, 0.6);
+          animation: ball-breathe 2s ease-in-out infinite;
+        }
+        /* 运行/首译完成后的淡化隐身态 (0.24 透明度，悬停/触碰恢复 1) */
         .manga-ui-button.stealth {
-          opacity: 0.18;
-          filter: grayscale(80%);
+          opacity: 0.24;
+          animation: none;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+          border-color: rgba(255, 255, 255, 0.12);
+          transition: opacity 0.8s ease, box-shadow 0.5s ease, border-color 0.5s ease, transform 0.2s ease;
         }
         .manga-ui-button.stealth:hover,
         .manga-ui-button.stealth:active {
           opacity: 1;
-          filter: none;
+          box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
         }
 
         /* 195px 老版经典暗色菜单 */
@@ -658,12 +674,25 @@
       if (isRunning) {
         button.classList.add('working');
         btnIconDisplay.style.filter = 'drop-shadow(0 2px 4px rgba(0,0,0,0.5))';
-        button.classList.add('stealth'); // 运行后自动进入 0.18 隐身态
+        if (hasFirstTranslation) {
+          button.classList.add('stealth');
+        } else {
+          button.classList.remove('stealth');
+        }
       } else {
+        hasFirstTranslation = false;
         button.classList.remove('working', 'stealth');
         btnIconDisplay.style.filter = 'grayscale(100%)';
       }
     }
+
+    globalThis.ComicFloatingBallOnFirstTranslation = () => {
+      hasFirstTranslation = true;
+      const isRunning = captureStatus.running || captureStatus.starting;
+      if (isRunning && menu.hasAttribute('hidden')) {
+        button.classList.add('stealth');
+      }
+    };
 
     button.addEventListener('pointerdown', (e) => {
       if (e.button !== undefined && e.button !== 0) return;
@@ -706,7 +735,7 @@
     button.addEventListener('mouseenter', () => button.classList.remove('stealth'));
     button.addEventListener('mouseleave', () => {
       const isRunning = captureStatus.running || captureStatus.starting;
-      if (isRunning && menu.hasAttribute('hidden')) {
+      if (isRunning && hasFirstTranslation && menu.hasAttribute('hidden')) {
         button.classList.add('stealth');
       }
     });
@@ -723,7 +752,7 @@
   function closeMenu() {
     menu.setAttribute('hidden', '');
     const isRunning = captureStatus.running || captureStatus.starting;
-    if (isRunning) button.classList.add('stealth');
+    if (isRunning && hasFirstTranslation) button.classList.add('stealth');
   }
 
   // ========================================================
