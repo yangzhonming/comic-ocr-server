@@ -122,12 +122,15 @@
     } catch {}
   }
 
+  let inMemoryLang = 'kr';
+
   function normalizeLang(lang) {
     if (!lang) return 'kr';
     const l = String(lang).toLowerCase().trim();
     if (l === 'jp' || l === 'ja' || l === 'japanese' || l === '日文' || l === '日语') return 'ja';
     if (l === 'kr' || l === 'ko' || l === 'korean' || l === '韩文' || l === '韩语') return 'kr';
     if (l === 'en' || l === 'english' || l === '英文' || l === '英语') return 'en';
+    if (l === 'es' || l === 'spanish' || l === '西文' || l === '西语' || l === '西班牙语') return 'es';
     if (l === 'ru' || l === 'russian' || l === '俄文' || l === '俄语') return 'ru';
     return 'kr'; // 默认降级为韩语
   }
@@ -139,12 +142,17 @@
         if (val) return normalizeLang(val);
       }
     } catch {}
-    return 'kr';
+    return inMemoryLang || 'kr';
   }
 
   function setStoredLang(lang) {
     const l = normalizeLang(lang);
-    try { localStorage.setItem('comic_ocr_lang', l); } catch {}
+    inMemoryLang = l;
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('comic_ocr_lang', l);
+      }
+    } catch {}
     try {
       window.dispatchEvent(new CustomEvent('comic-lang-changed', { detail: { lang: l } }));
     } catch {}
@@ -155,6 +163,7 @@
     'kr': '🇰🇷',
     'ja': '🇯🇵',
     'en': '🇺🇸',
+    'es': '🇪🇸',
     'ru': '🇷🇺'
   };
 
@@ -162,6 +171,7 @@
     'kr': 'KR',
     'ja': 'JA',
     'en': 'EN',
+    'es': 'ES',
     'ru': 'RU'
   };
 
@@ -186,7 +196,7 @@
     host = document.createElement('div');
     host.id = 'comic-reader-floating-ball-v2';
     host.style.cssText = 'all:initial;position:fixed;left:0;top:0;z-index:2147483647;display:none;pointer-events:auto;';
-    shadow = host.attachShadow({ mode: 'open' });
+    shadow = host.attachShadow({ mode: 'closed' });
 
     shadow.innerHTML = `
       <style>
@@ -510,6 +520,10 @@
             <span>🇺🇸 English (英文)</span>
             <span class="chk-mark" style="color:#2ed573; font-size:11px; display:none;">✓</span>
           </div>
+          <div class="manga-ui-item" data-lang="es">
+            <span>🇪🇸 Español (西班牙文)</span>
+            <span class="chk-mark" style="color:#2ed573; font-size:11px; display:none;">✓</span>
+          </div>
           <div class="manga-ui-item" data-lang="ru">
             <span>🇷🇺 Русский (俄文)</span>
             <span class="chk-mark" style="color:#2ed573; font-size:11px; display:none;">✓</span>
@@ -640,6 +654,13 @@
         </div>
       </div>
     `;
+
+    if (typeof shadow.getElementById !== 'function') {
+      shadow.getElementById = (id) => (shadow.querySelector ? shadow.querySelector('#' + id) : null) || { style: {}, addEventListener() {}, classList: { add() {}, remove() {}, toggle() {} }, setAttribute() {}, getAttribute() {} };
+    }
+    if (typeof shadow.querySelectorAll !== 'function') {
+      shadow.querySelectorAll = () => [];
+    }
 
     button = shadow.getElementById('ball-button');
     btnIconDisplay = shadow.getElementById('ball-flag-icon');

@@ -6,7 +6,15 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function (strip) {
   "use strict";
 
+  const warmBitmapCache = new Map();
+
   function loadBitmap(url) {
+    if (warmBitmapCache.has(url)) {
+      const cached = warmBitmapCache.get(url);
+      if (cached && cached.width > 0) {
+        return Promise.resolve(cached);
+      }
+    }
     return new Promise((resolve, reject) => {
       const image = new Image();
       image.crossOrigin = "anonymous";
@@ -20,6 +28,29 @@
       image.onerror = () => reject(new Error("Image failed to load: " + url.slice(0, 120)));
       image.src = url;
     });
+  }
+
+  async function warmBitmap(url) {
+    if (!url) return null;
+    if (warmBitmapCache.has(url)) return warmBitmapCache.get(url);
+    try {
+      const b = await loadBitmap(url);
+      if (b) warmBitmapCache.set(url, b);
+      return b;
+    } catch {
+      return null;
+    }
+  }
+
+  function getWarmBitmap(url) {
+    return warmBitmapCache.get(url) || null;
+  }
+
+  function clearWarmBitmaps() {
+    for (const b of warmBitmapCache.values()) {
+      try { if (b && typeof b.close === 'function') b.close(); } catch {}
+    }
+    warmBitmapCache.clear();
   }
 
   function canvasBlob(canvas, quality) {
@@ -150,5 +181,13 @@
     };
   }
 
-  return {createProvider};
+  return {
+    createProvider,
+    loadBitmap,
+    canvasBlob,
+    warmBitmap,
+    getWarmBitmap,
+    clearWarmBitmaps,
+    getWarmCount() { return warmBitmapCache.size; }
+  };
 });

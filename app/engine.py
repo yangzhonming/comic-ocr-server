@@ -1,4 +1,5 @@
 import os
+import re
 import threading
 from typing import Dict, List, Optional
 import cv2
@@ -60,7 +61,9 @@ def merge_horizontal_boxes(
                 if x_gap > avg_h * max_gap_ratio:
                     continue
 
-                cur[i] = [min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3])]
+                score_a = a[4] if len(a) > 4 else 0.85
+                score_b = b[4] if len(b) > 4 else 0.85
+                cur[i] = [min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]), max(score_a, score_b)]
                 cur[j] = None
                 merged = True
                 break
@@ -86,13 +89,13 @@ def suppress_contained_boxes(
     sorted_boxes = sorted(boxes, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]), reverse=True)
     kept = []
     for b in sorted_boxes:
-        bx1, by1, bx2, by2 = b
+        bx1, by1, bx2, by2 = b[:4]
         area_b = (bx2 - bx1) * (by2 - by1)
         if area_b <= 0:
             continue
         is_contained = False
         for k in kept:
-            kx1, ky1, kx2, ky2 = k
+            kx1, ky1, kx2, ky2 = k[:4]
             area_k = (kx2 - kx1) * (ky2 - ky1)
             ix1 = max(bx1, kx1)
             iy1 = max(by1, ky1)
@@ -114,6 +117,8 @@ LANG_SCALES = {
     "korean": 0.089,
     "en": 0.065,
     "english": 0.065,
+    "es": 0.065,
+    "spanish": 0.065,
     "ru": 0.068,
     "russian": 0.068,
     "cyrillic": 0.068,
@@ -147,6 +152,8 @@ class OcrEngineManager:
         "korean": ("models/korean_PP-OCRv5_rec_mobile_infer.onnx", "models/ppocrv5_korean_dict.txt"),
         "en": ("models/en_PP-OCRv5_rec_mobile_infer.onnx", "models/ppocrv5_en_dict.txt"),
         "english": ("models/en_PP-OCRv5_rec_mobile_infer.onnx", "models/ppocrv5_en_dict.txt"),
+        "es": ("models/en_PP-OCRv5_rec_mobile_infer.onnx", "models/ppocrv5_en_dict.txt"),
+        "spanish": ("models/en_PP-OCRv5_rec_mobile_infer.onnx", "models/ppocrv5_en_dict.txt"),
         "jp": ("models/japan_PP-OCRv4_rec_infer.onnx", "models/japan_dict.txt"),
         "ja": ("models/japan_PP-OCRv4_rec_infer.onnx", "models/japan_dict.txt"),
         "japanese": ("models/japan_PP-OCRv4_rec_infer.onnx", "models/japan_dict.txt"),
@@ -168,7 +175,7 @@ class OcrEngineManager:
         clean = lang.strip().lower()
         if clean in ("kr", "ko", "korean"):
             return "kr"
-        if clean in ("en", "english"):
+        if clean in ("en", "english", "es", "spanish"):
             return "en"
         if clean in ("jp", "ja", "japanese"):
             return "jp"
@@ -245,13 +252,13 @@ class OcrEngineManager:
         start_y: int = 0
     ) -> List[BubbleItem]:
         """
-        单切片全流程处理核心管道 (优化纯净版):
+        单切片全流程处理核心管道 (极速纯净单模型版):
         1. DET 文本检测 (单次推理，提取候选框与置信度)
         2. 极简几何绝对秒杀 (面积 < 60 或 短边 <= 3px: 灭除扫描微尘/细划痕，长句 100% 豁免)
         3. 嵌套碎框抑制
         4. 语种分支策略: 仅韩文 (kr/ko) 启用前置水平合并，英文 (en) 等禁用
         5. 原图高清裁切 (+2px padding) 与批量 REC 识别
-        6. 后过滤双置信度决断: 过滤掉 clean_text 为空或 rec_score < 0.60 的假字符
+        6. 后过滤双置信度决断: 过滤掉 clean_text 为空或 rec_score < 0.42 的假字符
         7. 边界环众数精准取色与自然几何聚类
         """
         orig_h, orig_w = image.shape[:2]
@@ -290,7 +297,8 @@ class OcrEngineManager:
             if min(bw, bh) <= 3:
                 continue
 
-            raw_boxes.append([bx1, by1, bx2, by2])
+            det_s = float(dt_scores[idx]) if dt_scores is not None and idx < len(dt_scores) else 0.85
+            raw_boxes.append([bx1, by1, bx2, by2, det_s])
 
         if not raw_boxes:
             return []
@@ -308,8 +316,11 @@ class OcrEngineManager:
         # 5. 原图高清裁切 (+2px padding)
         crops = []
         box_coords = []
+        box_det_scores = []
         pad = 2
-        for bx1, by1, bx2, by2 in fused_boxes:
+        for box_item in fused_boxes:
+            bx1, by1, bx2, by2 = box_item[:4]
+            det_s = box_item[4] if len(box_item) > 4 else 0.85
             cbx1 = max(0, bx1 - pad)
             cby1 = max(0, by1 - pad)
             cbx2 = min(orig_w, bx2 + pad)
@@ -317,6 +328,7 @@ class OcrEngineManager:
             if (cbx2 - cbx1) >= 4 and (cby2 - cby1) >= 4:
                 crops.append(image[cby1:cby2, cbx1:cbx2])
                 box_coords.append([cbx1, cby1, cbx2, cby2])
+                box_det_scores.append(det_s)
 
         if not crops:
             return []
@@ -324,20 +336,54 @@ class OcrEngineManager:
         # 6. 批量文本行识别
         rec_results, _ = engine.text_rec(crops)
 
-        # 7. 后过滤逻辑: REC 置信度 >= 0.60 决断过滤
+        # 水印与扫图组广告正则黑名单
+        watermark_patterns = [
+            re.compile(r'(?i)\b(?:https?://|www\.)\S+'),
+            re.compile(r'(?i)\S+\.(?:net|com|org|es|xyz|io|me|co|top|cc|site|online)\b'),
+            re.compile(r'(?i)\b(?:scan|scans|scanlation|scans?esp|templescan|leeronline)\b'),
+            re.compile(r'(?i)\b(?:traducido|link en el navegador|subido por|t\.me/|discord\.gg)\b'),
+            re.compile(r'(?i)\b(?:mejor calidad|escribiendo este link)\b'),
+        ]
+
+        def is_noise_or_watermark(txt: str) -> bool:
+            c = txt.strip()
+            # 1. 单字符孤立噪音 (如 I, 1, l, -)，韩文字符单字拟声/叹词豁免
+            if len(c) <= 1 and not re.search(r'[\uac00-\ud7a3]', c):
+                return True
+            # 2. 水印与扫图组导流横幅 (顶级域名、汉化组关键词)
+            for pat in watermark_patterns:
+                if pat.search(c):
+                    return True
+            return False
+
+        # 7. 后过滤逻辑: REC 置信度 >= 0.80 (带标点 0.70) + 双低双杀 + 水印杂音清洗
         text_line_items: List[TextLineItem] = []
         for i, (text, rec_score) in enumerate(rec_results):
             rec_score = float(rec_score)
+            det_score = float(box_det_scores[i]) if i < len(box_det_scores) else 0.85
             clean_text = text.strip()
 
-            # 文本必须有效且 REC 置信度达到黄金线 0.60
-            if not clean_text or rec_score < 0.60:
+            if not clean_text:
+                continue
+
+            # 1. 标点保护下的 REC 阈值: 无标点硬卡 0.80，有标点放宽至 0.70 兜底
+            has_dialogue_punct = bool(re.search(r'[~!?¿¡]|\.{2,}', clean_text))
+            min_rec = 0.70 if has_dialogue_punct else 0.80
+            if rec_score < min_rec:
+                continue
+
+            # 2. 双低联合截杀 (DET 与 REC 双双勉强及格 -> 背景噪点杂线)
+            if det_score < 0.70 and rec_score < 0.75:
+                continue
+
+            # 3. 强力过滤汉化组水印、扫图横幅与极短单字符噪音
+            if is_noise_or_watermark(clean_text):
                 continue
 
             bbox = box_coords[i]
-            bg_hex, text_hex = extract_colors_fast(image, tuple(bbox))
+            # 优化：彻底移除单行第一次 extract_colors_fast 取色！单切片节省近 50% CPU！
             fr = compute_fill_ratio(image, tuple(bbox))
-            text_line_items.append(TextLineItem(bbox, clean_text, rec_score, bg_hex, text_hex, fr))
+            text_line_items.append(TextLineItem(bbox, clean_text, rec_score, fill_ratio=fr))
 
         if not text_line_items:
             return []

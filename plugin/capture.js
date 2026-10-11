@@ -57,6 +57,92 @@
   let statusListener = () => {};
   let captureStats = { attribute: 0, observer: 0 };
   let captureSession = null;
+  let startClickTime = 0;
+  let readerDetectedTime = 0;
+  let firstImageReadyLogged = false;
+  let prewarmTimer = null;
+  let isPrewarming = false;
+  const pipelineTelemetry = {
+    firstImageReadyMs: 0,
+    clickToSlice0ReadyMs: 0,
+    clickToFirstOcrMs: 0,
+    slice0OcrDurationMs: 0,
+    slices1To5AllOcrReadyMs: 0,
+    firstLlmTtfbMs: 0,
+    firstLlmTotalMs: 0,
+    slice0Bubbles: 0,
+    first6SlicesBubbles: 0,
+    totalSlicesOcrCompleted: 0,
+    prewarm: {
+      probed: 0,
+      warmedBitmaps: 0,
+      total: 0
+    }
+  };
+
+  let lastHealthCheckTime = 0;
+  let lastHealthCheckApi = '';
+  async function ensureBackendHealthy(apiUrl) {
+    if (lastHealthCheckApi === apiUrl && (Date.now() - lastHealthCheckTime) < 120000) {
+      return true;
+    }
+    const res = await fetch(`${apiUrl}/health`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    lastHealthCheckTime = Date.now();
+    lastHealthCheckApi = apiUrl;
+    return true;
+  }
+
+  function schedulePrewarm(delay = 100) {
+    clearTimeout(prewarmTimer);
+    prewarmTimer = setTimeout(() => {
+      void runPrewarm();
+    }, delay);
+  }
+
+  async function runPrewarm() {
+    if (running || starting || isPrewarming || !entries.length) return;
+    isPrewarming = true;
+    try {
+      const targets = entries.slice(0, 10);
+      pipelineTelemetry.prewarm.total = targets.length;
+      let probedCount = 0;
+      let warmBitmapCount = 0;
+
+      for (let i = 0; i < targets.length; i++) {
+        if (running || starting) break;
+        const entry = targets[i];
+        const url = getImageUrl(entry.img);
+        if (!url) continue;
+
+        if (globalThis.ComicCaptureFlow?.preprobe) {
+          const probed = await globalThis.ComicCaptureFlow.preprobe({
+            img: entry.img,
+            pageIndex: entry.pageIndex,
+            imageId: entry.imageId,
+            url
+          });
+          if (probed && probed.sourceWidth > 0) probedCount++;
+        }
+
+        if (i < 6 && globalThis.ComicSlicePixels?.warmBitmap) {
+          const b = await globalThis.ComicSlicePixels.warmBitmap(url);
+          if (b && b.width > 0) warmBitmapCount++;
+        }
+
+        pipelineTelemetry.prewarm.probed = probedCount;
+        pipelineTelemetry.prewarm.warmedBitmaps = warmBitmapCount;
+        await new Promise(r => setTimeout(r, 16));
+      }
+
+      console.log(`[ComicCapture] 🔥【静默预热完成】尺寸探测: ${probedCount}/${targets.length} 页, Bitmap内存池预热: ${warmBitmapCount}/6 页 (点击翻译可 0ms 秒切)`);
+      notify();
+    } catch (err) {
+      console.warn('[ComicCapture] 静默预热微小异常:', err?.message);
+    } finally {
+      isPrewarming = false;
+    }
+  }
 
   function imageId(img) {
     let id = ids.get(img);
@@ -83,8 +169,54 @@
     return 0.299 * r + 0.587 * g + 0.114 * b;
   }
 
+  function hexToRgba(hex, alpha) {
+    if (!hex) return `rgba(255, 255, 255, ${alpha})`;
+    let c = hex.replace('#', '');
+    if (c.length === 3) c = c[0] + c[0] + c[1] + c[1] + c[2] + c[2];
+    if (c.length === 6) {
+      const r = parseInt(c.slice(0, 2), 16);
+      const g = parseInt(c.slice(2, 4), 16);
+      const b = parseInt(c.slice(4, 6), 16);
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+    return `rgba(255, 255, 255, ${alpha})`;
+  }
+
   function isColorDark(hex) {
     return getLuminance(hex) < 128;
+  }
+
+  function isColorWhite(hex) {
+    if (!hex || typeof hex !== 'string') return true;
+    let c = hex.replace('#', '');
+    if (c.length === 3) c = c[0] + c[0] + c[1] + c[1] + c[2] + c[2];
+    if (c.length !== 6) return true;
+    const r = parseInt(c.slice(0, 2), 16);
+    const g = parseInt(c.slice(2, 4), 16);
+    const b = parseInt(c.slice(4, 6), 16);
+    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+    const sat = Math.max(r, g, b) - Math.min(r, g, b);
+    return lum >= 235 && sat <= 20;
+  }
+
+  function getPatchShadow(bgColor, isGlow) {
+    const isWhite = isColorWhite(bgColor);
+    if (isGlow) {
+      if (isWhite) {
+        return 'inset 0 0 10px 4px rgba(255, 255, 255, 0.85), 0 0 8px 2px rgba(255, 255, 255, 0.45)';
+      }
+      // 非白色渐变/光罩：边框与羽化均取自身背景色的柔和过渡，消除突兀白圈，色彩100%统一
+      return `inset 0 0 10px 4px ${hexToRgba(bgColor, 0.90)}, 0 0 8px 2px ${hexToRgba(bgColor, 0.45)}`;
+    }
+    // 常规对白实色补丁 solid_patch
+    if (isWhite) {
+      return 'inset 0 0 8px 3px rgba(255, 255, 255, 0.95)';
+    }
+    if (isColorDark(bgColor)) {
+      return 'inset 0 0 8px 3px rgba(0, 0, 0, 0.85)';
+    }
+    // 纯色非白色补丁（如浅灰、淡黄、浅蓝）：边框与羽化均采用自身纯色，高度统一无突兀白圈
+    return `inset 0 0 8px 3px ${hexToRgba(bgColor, 0.90)}, 0 0 4px 1px ${hexToRgba(bgColor, 0.35)}`;
   }
 
   function ensureContrastColor(textColor, bgColor) {
@@ -354,7 +486,7 @@
       overlayHost = document.createElement('div');
       overlayHost.id = 'comic-capture-overlay-host';
       overlayHost.style.cssText = 'all:initial;position:absolute;top:0;left:0;width:100%;height:0;pointer-events:none;z-index:2147483646;display:block;overflow:visible;';
-      overlayRoot = overlayHost.attachShadow({ mode: 'open' });
+      overlayRoot = overlayHost.attachShadow({ mode: 'closed' });
       overlayRoot.innerHTML = `<style>
         :host { all: initial; }
         .badge { position: absolute; min-width: 28px; height: 28px; padding: 0 6px; box-sizing: border-box;
@@ -374,7 +506,7 @@
           box-shadow: 0 1px 4px #0008; }
         .coordinate-line.slice .coordinate-label { background: #08743ee8; }
 
-        /* 漫画文字气泡覆盖补丁 - 绝对定位贴合漫画长卷 */
+        /* 漫画文字气泡覆盖补丁 - 绝对定位贴合漫画长卷 (全方位护眼插件与深色模式免疫) */
         .manga-patch {
           position: absolute;
           box-sizing: border-box;
@@ -387,11 +519,13 @@
           user-select: none;
           color-scheme: light only !important;
           forced-color-adjust: none !important;
+          isolation: isolate !important;
+          filter: none !important;
           transition: opacity 0.15s ease, transform 0.1s ease;
         }
         .manga-patch:hover {
           outline: 1.5px solid rgba(40, 167, 232, 0.7);
-          border-radius: 6px;
+          border-radius: 12px;
         }
         .manga-patch.hidden-mask .manga-patch-bg {
           opacity: 0 !important;
@@ -403,44 +537,113 @@
           opacity: 0 !important;
           visibility: hidden !important;
         }
-        /* 拟声词幽灵框: 默认零遮盖原画背景，悬停/透视时高亮展示 */
+        /* 拟声词/环境美术字: 方案1 漫画原生发光美术字，原位零遮盖呈现，彻底告别旧版黑框 */
         .manga-patch.ghost-patch {
           background: transparent !important;
-          opacity: 0;
-          transition: opacity 0.2s ease, outline 0.15s ease;
+          opacity: 0.95;
+          box-shadow: none !important;
+          transition: opacity 0.2s ease, transform 0.15s ease;
         }
         .manga-patch.ghost-patch:hover {
           opacity: 1 !important;
-          outline: 1.5px dashed #f59e0b !important;
-          background: rgba(15, 23, 42, 0.75) !important;
-          border-radius: 6px;
+          outline: 1px dashed rgba(56, 189, 248, 0.6) !important;
+          background: transparent !important;
+          border-radius: 4px;
         }
         .manga-patch.ghost-patch .manga-patch-bg {
           display: none !important;
         }
         .manga-patch.ghost-patch .manga-patch-text {
-          color: #fbbf24 !important;
-          text-shadow: 0 1px 3px #000, 0 0 6px #000 !important;
+          font-style: italic !important;
+          font-weight: 800 !important;
+          color: #ff3838 !important;
+          text-shadow: 
+            -2px -2px 0 #ffffff,
+             2px -2px 0 #ffffff,
+            -2px  2px 0 #ffffff,
+             2px  2px 0 #ffffff,
+             0   -2px 0 #ffffff,
+             0    2px 0 #ffffff,
+            -2px  0   0 #ffffff,
+             2px  0   0 #ffffff,
+             0 0 6px #ffffff,
+             0 0 12px rgba(255, 255, 255, 0.95) !important;
+          letter-spacing: 0.5px;
         }
 
-        /* 画外音/旁白框: 透明底，双描边高反差字体，保全原画美感 */
-        .manga-patch.narration-patch .manga-patch-bg {
+        /* 场景悬浮台词/画外音: 360度纯白强力描边 + 纯白柔和晕圈，坚决剔除任何黑色阴影脏晕 */
+        .manga-patch.ambient-patch {
           background: transparent !important;
           box-shadow: none !important;
         }
+        .manga-patch.ambient-patch:hover {
+          outline: 1px dashed rgba(56, 189, 248, 0.6) !important;
+          background: transparent !important;
+        }
+        .manga-patch.ambient-patch .manga-patch-bg {
+          display: none !important;
+        }
+        .manga-patch.ambient-patch .manga-patch-text {
+          color: #0f172a !important;
+          font-weight: 800 !important;
+          text-shadow: 
+            -2px -2px 0 #ffffff,
+             2px -2px 0 #ffffff,
+            -2px  2px 0 #ffffff,
+             2px  2px 0 #ffffff,
+             0   -2px 0 #ffffff,
+             0    2px 0 #ffffff,
+            -2px  0   0 #ffffff,
+             2px  0   0 #ffffff,
+             0 0 8px #ffffff,
+             0 0 16px rgba(255, 255, 255, 0.95) !important;
+        }
+
+        .manga-patch.ghost-patch.hidden-mask,
+        .manga-patch.ambient-patch.hidden-mask,
+        .manga-patch.glow-patch.hidden-mask {
+          opacity: 0 !important;
+          background: transparent !important;
+          outline: 1px dashed rgba(229, 54, 93, 0.4) !important;
+        }
+
+        /* 渐变气泡/平滑背景光罩: 半透明磨砂柔和羽化光罩，绝不糊死原画 */
+        .manga-patch.glow-patch {
+          background: transparent !important;
+          box-shadow: none !important;
+        }
+        .manga-patch.glow-patch:hover {
+          outline: 1px dashed rgba(56, 189, 248, 0.6) !important;
+        }
+        .manga-patch.glow-patch .manga-patch-bg {
+          display: block !important;
+          border-radius: 12px !important;
+          backdrop-filter: blur(3px) !important;
+        }
+        .manga-patch.glow-patch .manga-patch-text {
+          font-weight: 700 !important;
+        }
+
+        /* 画外音/旁白框: 实色高遮盖底，防止原图文字透出造成重影 */
+        .manga-patch.narration-patch .manga-patch-bg {
+          background: rgba(255, 255, 255, 0.95) !important;
+          box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15) !important;
+          border-radius: 4px !important;
+        }
         .manga-patch.narration-patch .manga-patch-text {
-          color: #ffffff !important;
-          text-shadow: -1.5px -1.5px 0 #000, 1.5px -1.5px 0 #000, -1.5px 1.5px 0 #000, 1.5px 1.5px 0 #000, 0 0 5px rgba(0,0,0,0.9) !important;
+          color: #1a1a1a !important;
+          text-shadow: none !important;
         }
         .manga-patch-bg {
           position: absolute;
           inset: -2px -3px; /* 边缘微扩 2~3px，严密遮盖底图原文防止漏边 */
-          border-radius: 6px;
+          border-radius: 12px;
           pointer-events: none;
           z-index: 1;
           color-scheme: light only !important;
           forced-color-adjust: none !important;
-          box-shadow: inset 0 0 7px 3px rgba(255, 255, 255, 0.9); /* 边缘羽化融合 */
+          isolation: isolate !important;
+          filter: none !important;
         }
         .manga-patch-text {
           position: relative;
@@ -450,7 +653,7 @@
           justify-content: center;
           text-align: center;
           line-height: 1.25;
-          word-break: normal;
+          word-break: keep-all;
           overflow-wrap: break-word;
           text-wrap: balance;
           white-space: pre-wrap;
@@ -461,6 +664,9 @@
           height: 100%;
           color-scheme: light only !important;
           forced-color-adjust: none !important;
+          -webkit-text-fill-color: initial !important;
+          isolation: isolate !important;
+          filter: none !important;
         }
       </style><div id="coordinates"></div><div id="badges"></div><div id="patches"></div>`;
       window.addEventListener('resize', scheduleOverlay, { passive: true });
@@ -694,6 +900,25 @@
     return bubble.text || '';
   }
 
+  function computeOptimalFontSize(text, baseSize, containerW) {
+    if (!text || containerW <= 0) return baseSize;
+    const lines = String(text).split('\n');
+    let maxLineChars = 0;
+    for (const l of lines) {
+      const clean = l.trim();
+      let visualUnits = 0;
+      for (let i = 0; i < clean.length; i++) {
+        visualUnits += clean.charCodeAt(i) > 255 ? 1.0 : 0.55;
+      }
+      if (visualUnits > maxLineChars) maxLineChars = visualUnits;
+    }
+    if (maxLineChars <= 0) return baseSize;
+    const availW = Math.max(20, containerW - 10);
+    const maxCharSize = Math.floor(availW / maxLineChars);
+    // 最低保护 12px（严格保证手机端视觉清晰度），平滑阶梯缩放
+    return Math.max(12, Math.min(baseSize, maxCharSize));
+  }
+
   function updatePatchText(sliceIndex, bubble, newText) {
     const bubbles = patchesBySlice.get(sliceIndex) || [];
     const bIdx = bubbles.indexOf(bubble);
@@ -702,17 +927,26 @@
     const patch = patchElements.get(key);
     if (patch) {
       const textEl = patch.querySelector('.manga-patch-text');
-      if (textEl && textEl.textContent !== newText) {
-        textEl.textContent = newText;
+      if (textEl) {
+        if (textEl.textContent !== newText) {
+          textEl.textContent = newText;
+        }
+        const effW = parseFloat(patch.style.width) || 0;
+        const baseSize = patch._baseFontSize || parseFloat(textEl.style.fontSize) || 16;
+        const optSize = computeOptimalFontSize(newText, baseSize, effW);
+        textEl.style.fontSize = `${optSize}px`;
       }
       const isGhost = Boolean(bubble.is_ghost || bubble.role === 'sfx_ghost');
+      const isAmbient = Boolean(bubble.role === 'ambient');
       const isNarration = Boolean(bubble.role === 'narration');
       const currentLang = globalThis.ComicLLMStore?.getOcrLang ? globalThis.ComicLLMStore.getOcrLang() : 'kr';
       const isEn = (currentLang === 'en') || /[A-Za-z]{3,}/.test(bubble.text || '');
       const origText = (isEn && bubble.text) ? toReadingCase(bubble.text) : (bubble.text || '');
 
       if (isGhost) {
-        patch.title = `[拟声词幽灵框]\n译文: ${newText}\n原文: ${origText}\n(悬停查看·点击透视)`;
+        patch.title = `[拟声词美术字]\n译文: ${newText}\n原文: ${origText}\n(点击切换显示/透视原画)`;
+      } else if (isAmbient) {
+        patch.title = `[背景环境台词]\n译文: ${newText}\n原文: ${origText}\n(点击切换显示/透视原画)`;
       } else if (isNarration) {
         patch.title = `${newText}\n[画外音/旁白]\n原文: ${origText}`;
       } else {
@@ -848,6 +1082,7 @@
               sent_at: slice._ocrSentAt || '',
               received_at: slice._ocrReceivedAt || '',
               duration_ms: slice._ocrTimeMs || 0,
+              click_to_ocr_ms: slice._clickToOcrMs || 0,
               bubbles_count: bubbles.length
             },
             llm: {
@@ -874,17 +1109,38 @@
       let fullRawResponse = '';
       let currentBubbleId = -1;
 
+      let parsedLinesCount = 0;
+      let detectedIndexOffset = 0;
+
       const handleParsedLine = (rawLine) => {
         const line = rawLine.trim();
         if (!line) return;
         const match = line.match(/^(?:\[(\d+)\]|(\d+)[\.、：:])\s*(.+)$/);
         if (match) {
           const id = parseInt(match[1] || match[2], 10);
-          currentBubbleId = id;
           const rawTrans = match[3];
           const cleanTrans = cleanTranslatedText(rawTrans);
-          if (cleanTrans && translatableBubbles[id]) {
-            const targetBubble = translatableBubbles[id];
+
+          // 关键修复：1-based 索引与跳行自动对齐纠偏 (Index Alignment Correction)
+          // 很多大模型 (如 DeepSeek) 自然使用 1 开始编号 [1], [2]...
+          // 若首行解析到 [1]，且气泡数与序号吻合，或出现 id === translatableBubbles.length，说明大模型整体偏移 +1
+          if (parsedLinesCount === 0 && id === 1 && !translatableBubbles[id] && translatableBubbles[0]) {
+            detectedIndexOffset = -1;
+          } else if (id === translatableBubbles.length && translatableBubbles[id - 1]) {
+            detectedIndexOffset = -1;
+          }
+
+          let mappedId = id + detectedIndexOffset;
+          // 若按偏移仍未匹配到目标气泡，但按解析顺序行号有对应气泡，作为保底 fallback
+          if (!translatableBubbles[mappedId] && translatableBubbles[parsedLinesCount]) {
+            mappedId = parsedLinesCount;
+          }
+
+          currentBubbleId = mappedId;
+          parsedLinesCount++;
+
+          if (cleanTrans && translatableBubbles[mappedId]) {
+            const targetBubble = translatableBubbles[mappedId];
             targetBubble.translatedText = cleanTrans;
             updatePatchText(slice.sliceIndex, targetBubble, cleanTrans);
             if (!firstTranslationEmitted) {
@@ -927,7 +1183,14 @@
             const parsed = JSON.parse(payload);
             const content = parsed.choices?.[0]?.delta?.content || '';
             if (content) {
-              if (!llmFirstTokenAt) llmFirstTokenAt = new Date().toISOString();
+              if (!llmFirstTokenAt) {
+                llmFirstTokenAt = new Date().toISOString();
+                if (slice.sliceIndex === 1 && !pipelineTelemetry.firstLlmTtfbMs) {
+                  pipelineTelemetry.firstLlmTtfbMs = Math.round(((typeof performance !== 'undefined') ? performance.now() : Date.now()) - llmStartTime);
+                  console.log(`[ComicCapture] ⚡【首字TTFB】首切片大模型首字返回延迟: ${pipelineTelemetry.firstLlmTtfbMs}ms`);
+                  notify();
+                }
+              }
               fullRawResponse += content;
               accumulated += content;
               const accLines = accumulated.split('\n');
@@ -947,6 +1210,11 @@
 
       const llmCompletedAt = new Date().toISOString();
       const llmDuration = Math.round(((typeof performance !== 'undefined') ? performance.now() : Date.now()) - llmStartTime);
+      if (slice.sliceIndex === 1 && !pipelineTelemetry.firstLlmTotalMs) {
+        pipelineTelemetry.firstLlmTotalMs = llmDuration;
+        console.log(`[ComicCapture] ⚡【首片LLM总耗时】首切片大模型流完成耗时: ${pipelineTelemetry.firstLlmTotalMs}ms`);
+        notify();
+      }
       if (globalThis.ComicPacketInspector) {
         globalThis.ComicPacketInspector.record({
           sliceTag,
@@ -957,6 +1225,7 @@
             sent_at: slice._ocrSentAt || '',
             received_at: slice._ocrReceivedAt || '',
             duration_ms: slice._ocrTimeMs || 0,
+            click_to_ocr_ms: slice._clickToOcrMs || 0,
             bubbles_count: bubbles.length
           },
           llm: {
@@ -996,6 +1265,7 @@
               sent_at: slice._ocrSentAt || '',
               received_at: slice._ocrReceivedAt || '',
               duration_ms: slice._ocrTimeMs || 0,
+              click_to_ocr_ms: slice._clickToOcrMs || 0,
               bubbles_count: bubbles.length
             },
             llm: {
@@ -1030,12 +1300,85 @@
     let count = 0;
     const visibleKeys = new Set();
 
+    // 跨切片空间几何去重：收集所有气泡候选，彻底消除相邻切片 overlap 缓冲区导致的双重渲染与文字重影
+    const candidates = [];
     for (const [sliceIndex, bubbles] of patchesBySlice) {
       for (let bIdx = 0; bIdx < bubbles.length; bIdx++) {
         const bubble = bubbles[bIdx];
         if (!bubble?.box_abs || bubble.box_abs.length < 4) continue;
+        candidates.push({ sliceIndex, bIdx, bubble });
+      }
+    }
 
-        const rawX0 = bubble.box_abs[0];
+    const uniqueCandidates = [];
+    for (const cand of candidates) {
+      const b = cand.bubble;
+      const bX0 = b.box_abs[0];
+      const bY0 = b.box_abs[1];
+      const bW = b.box_abs[2];
+      const bH = b.box_abs[3];
+      const bArea = bW * bH;
+
+      let isDuplicate = false;
+      for (const existing of uniqueCandidates) {
+        const eb = existing.bubble;
+        const eX0 = eb.box_abs[0];
+        const eY0 = eb.box_abs[1];
+        const eW = eb.box_abs[2];
+        const eH = eb.box_abs[3];
+        const eArea = eW * eH;
+
+        const ix0 = Math.max(bX0, eX0);
+        const iy0 = Math.max(bY0, eY0);
+        const ix1 = Math.min(bX0 + bW, eX0 + eW);
+        const iy1 = Math.min(bY0 + bH, eY0 + eH);
+
+        if (ix1 > ix0 && iy1 > iy0) {
+          const interArea = (ix1 - ix0) * (iy1 - iy0);
+          const iou = interArea / (bArea + eArea - interArea);
+          const minCover = interArea / Math.min(bArea, eArea);
+
+          // 空间判定：IoU >= 0.30 或 包含度 >= 0.50，判定为同区域重叠的同一物理气泡
+          if (iou >= 0.30 || minCover >= 0.50) {
+            isDuplicate = true;
+            if (b.translatedText && !eb.translatedText) {
+              eb.translatedText = b.translatedText;
+            } else if (eb.translatedText && !b.translatedText) {
+              b.translatedText = eb.translatedText;
+            }
+            break;
+          }
+        } else {
+          // 关键修复：跨切线边界粘连去重 (Boundary Collision Deduplication)
+          // 当气泡被切线横切为上下两半时，两个子气泡在垂直方向相切或仅间隔数像素 (verticalGap <= 15)，
+          // 水平方向重合比例高 (xOverlapRatio >= 0.60)，且来自相邻切片 (Math.abs(cand.sliceIndex - existing.sliceIndex) <= 1)
+          const xInter = Math.max(0, Math.min(bX0 + bW, eX0 + eW) - Math.max(bX0, eX0));
+          const xOverlapRatio = Math.min(bW, eW) > 0 ? (xInter / Math.min(bW, eW)) : 0;
+          const verticalGap = Math.max(0, Math.max(bY0, eY0) - Math.min(bY0 + bH, eY0 + eH));
+
+          if (xOverlapRatio >= 0.60 && verticalGap <= 15 && Math.abs(cand.sliceIndex - existing.sliceIndex) <= 1) {
+            isDuplicate = true;
+            const mergedY0 = Math.min(bY0, eY0);
+            const mergedY1 = Math.max(bY0 + bH, eY0 + eH);
+            const mergedX0 = Math.min(bX0, eX0);
+            const mergedX1 = Math.max(bX0 + bW, eX0 + eW);
+            eb.box_abs = [mergedX0, mergedY0, mergedX1 - mergedX0, mergedY1 - mergedY0];
+            if (b.translatedText && (!eb.translatedText || b.translatedText.length > eb.translatedText.length)) {
+              eb.translatedText = b.translatedText;
+            }
+            break;
+          }
+        }
+      }
+
+      if (!isDuplicate) {
+        uniqueCandidates.push(cand);
+      }
+    }
+
+    for (const cand of uniqueCandidates) {
+      const { sliceIndex, bIdx, bubble } = cand;
+      const rawX0 = bubble.box_abs[0];
         const rawY0 = bubble.box_abs[1];
         const rawX1 = bubble.box_abs[0] + bubble.box_abs[2];
         const rawY1 = bubble.box_abs[1] + bubble.box_abs[3];
@@ -1061,6 +1404,27 @@
 
         if (patchW < 2 || patchH < 2) continue;
 
+        const renderMode = bubble.render_mode || (bubble.is_ghost || bubble.role === 'sfx' || bubble.role === 'sfx_ghost' ? 'sfx_overlay' : (bubble.role === 'ambient' ? 'outlined_overlay' : 'solid_patch'));
+        const isGhost = (renderMode === 'sfx_overlay' || bubble.is_ghost || bubble.role === 'sfx' || bubble.role === 'sfx_ghost');
+        const isAmbient = (renderMode === 'outlined_overlay' || bubble.role === 'ambient');
+        const isGlow = (renderMode === 'glow_patch');
+        const isNarration = Boolean(bubble.role === 'narration');
+        const isDialogue = (renderMode === 'solid_patch' && !isGhost && !isAmbient && !isGlow && !isNarration);
+        let effLeft = patchLeft;
+        let effTop = patchTop;
+        let effWidth = patchW;
+        let effHeight = patchH;
+
+        if (isDialogue) {
+          // 气泡内留白智能呼吸外扩 (横向左右各微扩 12%~16%，利用原图气泡原本充裕的白底空间，杜绝短句尴尬折行)
+          const padX = Math.min(20, Math.max(5, Math.round(patchW * 0.14)));
+          const padY = Math.min(8, Math.max(2, Math.round(patchH * 0.06)));
+          effLeft = Math.max(0, patchLeft - padX);
+          effWidth = patchW + padX * 2;
+          effTop = Math.max(0, patchTop - padY);
+          effHeight = patchH + padY * 2;
+        }
+
         const key = `${sliceIndex}-${bIdx}`;
         visibleKeys.add(key);
         count++;
@@ -1072,32 +1436,44 @@
           patch = document.createElement('div');
           patch.className = 'manga-patch not-dark darkreader-ignore';
           patch.dataset.key = key;
-          patch.setAttribute('data-darkreader-inline-bgcolor', '');
-          patch.setAttribute('data-darkreader-inline-color', '');
 
           const bgLayer = document.createElement('div');
           bgLayer.className = 'manga-patch-bg not-dark darkreader-ignore';
-          bgLayer.setAttribute('data-darkreader-inline-bgcolor', '');
-          bgLayer.setAttribute('data-darkreader-inline-boxshadow', '');
           const bgColor = bubble.bg || '#FFFFFF';
-          bgLayer.style.setProperty('background-color', bgColor, 'important');
           const dark = isColorDark(bgColor);
-          bgLayer.style.setProperty('box-shadow', `inset 0 0 7px 3px ${dark ? 'rgba(0,0,0,0.8)' : 'rgba(255,255,255,0.9)'}`, 'important');
+          if (renderMode === 'solid_patch' || isDialogue) {
+            bgLayer.style.setProperty('background-color', bgColor, 'important');
+            bgLayer.style.setProperty('box-shadow', getPatchShadow(bgColor, false), 'important');
+          } else if (renderMode === 'glow_patch' || isGlow) {
+            bgLayer.style.setProperty('background-color', hexToRgba(bgColor, 0.90), 'important');
+            bgLayer.style.setProperty('box-shadow', getPatchShadow(bgColor, true), 'important');
+          } else {
+            bgLayer.style.setProperty('display', 'none', 'important');
+          }
           bgLayer.style.setProperty('color-scheme', 'light only', 'important');
+          bgLayer.style.setProperty('forced-color-adjust', 'none', 'important');
+          bgLayer.style.setProperty('isolation', 'isolate', 'important');
 
           const textEl = document.createElement('div');
           textEl.className = 'manga-patch-text not-dark darkreader-ignore';
-          textEl.setAttribute('data-darkreader-inline-color', '');
-          textEl.setAttribute('data-darkreader-inline-textshadow', '');
-          const fgColor = ensureContrastColor(bubble.fg, bgColor);
-          textEl.style.setProperty('color', fgColor, 'important');
+          if (isGhost) {
+            textEl.style.setProperty('color', '#c0392b', 'important');
+          } else if (isAmbient) {
+            textEl.style.setProperty('color', '#0f172a', 'important');
+          } else if (isGlow) {
+            const fgColor = ensureContrastColor(bubble.fg, bgColor);
+            textEl.style.setProperty('color', fgColor, 'important');
+            textEl.style.setProperty('text-shadow', dark ? '0 0 4px #000000, 0 0 2px #000000' : '0 0 4px #ffffff, 0 0 2px #ffffff', 'important');
+          } else {
+            const fgColor = ensureContrastColor(bubble.fg, bgColor);
+            textEl.style.setProperty('color', fgColor, 'important');
+          }
           textEl.style.setProperty('color-scheme', 'light only', 'important');
-          const sCol = bgColor;
+          textEl.style.setProperty('forced-color-adjust', 'none', 'important');
+          textEl.style.setProperty('-webkit-text-fill-color', 'initial', 'important');
           const displayText = getBubbleDisplayText(bubble);
           textEl.textContent = displayText;
 
-          const isGhost = Boolean(bubble.is_ghost || bubble.role === 'sfx_ghost');
-          const isNarration = Boolean(bubble.role === 'narration');
           const currentLang = globalThis.ComicLLMStore?.getOcrLang ? globalThis.ComicLLMStore.getOcrLang() : 'kr';
           const isEn = (currentLang === 'en') || /[A-Za-z]{3,}/.test(bubble.text || '');
           const origText = (isEn && bubble.text) ? toReadingCase(bubble.text) : (bubble.text || '');
@@ -1105,8 +1481,18 @@
           if (isGhost) {
             patch.classList.add('ghost-patch');
             patch.title = bubble.translatedText
-              ? `[拟声词幽灵框]\n译文: ${bubble.translatedText}\n原文: ${origText}\n(悬停查看·点击透视)`
-              : `[拟声词幽灵框]\n原文: ${origText}\n(悬停查看·点击透视)`;
+              ? `[拟声词音效]\n译文: ${bubble.translatedText}\n原文: ${origText}\n(点击切换显示/透视原画)`
+              : `[拟声词音效]\n原文: ${origText}\n(点击切换显示/透视原画)`;
+          } else if (isAmbient) {
+            patch.classList.add('ambient-patch');
+            patch.title = bubble.translatedText
+              ? `[背景环境台词]\n译文: ${bubble.translatedText}\n原文: ${origText}\n(点击切换显示/透视原画)`
+              : `[背景环境台词]\n原文: ${origText}\n(点击切换显示/透视原画)`;
+          } else if (isGlow) {
+            patch.classList.add('glow-patch');
+            patch.title = bubble.translatedText
+              ? `[渐变/平滑台词]\n译文: ${bubble.translatedText}\n原文: ${origText}`
+              : `[渐变/平滑台词]\n原文: ${origText}`;
           } else if (isNarration) {
             patch.classList.add('narration-patch');
             patch.title = bubble.translatedText
@@ -1135,31 +1521,69 @@
           container.appendChild(patch);
         }
 
-        patch.style.left = `${patchLeft}px`;
-        patch.style.top = `${patchTop}px`;
-        patch.style.width = `${patchW}px`;
-        patch.style.height = `${patchH}px`;
+        patch.style.left = `${effLeft}px`;
+        patch.style.top = `${effTop}px`;
+        patch.style.width = `${effWidth}px`;
+        patch.style.height = `${effHeight}px`;
 
-        const fontSize = Math.max(11, Math.min(32, Math.round((bubble.size || 16) * scaleX)));
+        const baseFontSize = Math.max(12, Math.min(32, Math.round((bubble.size || 16) * scaleX)));
+        patch._baseFontSize = baseFontSize;
+        const displayText = getBubbleDisplayText(bubble);
+        const fontSize = computeOptimalFontSize(displayText, baseFontSize, effWidth);
+
         const textEl = patch.querySelector('.manga-patch-text');
         const bgLayer = patch.querySelector('.manga-patch-bg');
         const bgColor = bubble.bg || '#FFFFFF';
 
         if (bgLayer) {
-          bgLayer.style.setProperty('background-color', bgColor, 'important');
-          const dark = isColorDark(bgColor);
-          bgLayer.style.setProperty('box-shadow', `inset 0 0 7px 3px ${dark ? 'rgba(0,0,0,0.8)' : 'rgba(255,255,255,0.9)'}`, 'important');
+          if (renderMode === 'solid_patch' || isDialogue) {
+            bgLayer.style.setProperty('display', 'block', 'important');
+            bgLayer.style.setProperty('background-color', bgColor, 'important');
+            bgLayer.style.setProperty('box-shadow', getPatchShadow(bgColor, false), 'important');
+          } else if (renderMode === 'glow_patch' || isGlow) {
+            bgLayer.style.setProperty('display', 'block', 'important');
+            bgLayer.style.setProperty('background-color', hexToRgba(bgColor, 0.90), 'important');
+            bgLayer.style.setProperty('box-shadow', getPatchShadow(bgColor, true), 'important');
+          } else {
+            bgLayer.style.setProperty('display', 'none', 'important');
+          }
         }
 
         if (textEl) {
           textEl.style.fontSize = `${fontSize}px`;
           textEl.style.fontWeight = bubble.weight || 700;
-          const fgColor = ensureContrastColor(bubble.fg, bgColor);
-          textEl.style.setProperty('color', fgColor, 'important');
-          const displayText = getBubbleDisplayText(bubble);
+          const dark = isColorDark(bgColor);
+          if (isGhost) {
+            textEl.style.setProperty('color', '#c0392b', 'important');
+          } else if (isAmbient) {
+            textEl.style.setProperty('color', '#0f172a', 'important');
+          } else if (isGlow) {
+            const fgColor = ensureContrastColor(bubble.fg, bgColor);
+            textEl.style.setProperty('color', fgColor, 'important');
+            textEl.style.setProperty('text-shadow', dark ? '0 0 4px #000000, 0 0 2px #000000' : '0 0 4px #ffffff, 0 0 2px #ffffff', 'important');
+          } else {
+            const fgColor = ensureContrastColor(bubble.fg, bgColor);
+            textEl.style.setProperty('color', fgColor, 'important');
+          }
           if (textEl.textContent !== displayText) {
             textEl.textContent = displayText;
           }
+        }
+
+        if (isGhost) {
+          patch.classList.add('ghost-patch');
+          patch.classList.remove('ambient-patch', 'glow-patch', 'narration-patch');
+        } else if (isAmbient) {
+          patch.classList.add('ambient-patch');
+          patch.classList.remove('ghost-patch', 'glow-patch', 'narration-patch');
+        } else if (isGlow) {
+          patch.classList.add('glow-patch');
+          patch.classList.remove('ghost-patch', 'ambient-patch', 'narration-patch');
+        } else if (isNarration) {
+          patch.classList.add('narration-patch');
+          patch.classList.remove('ghost-patch', 'ambient-patch', 'glow-patch');
+        } else {
+          patch.classList.remove('ghost-patch', 'ambient-patch', 'glow-patch', 'narration-patch');
         }
 
         if (isHidden) {
@@ -1168,7 +1592,6 @@
           patch.classList.remove('hidden-mask');
         }
       }
-    }
 
     for (const [k, el] of patchElements) {
       if (!visibleKeys.has(k)) {
@@ -1225,6 +1648,13 @@
 
     entries = next.map((img, index) => ({ img, pageIndex: index + 1, imageId: imageId(img) }));
 
+    if (entries.length && entries[0]?.img?.complete && entries[0].img.naturalWidth > 0 && readerDetectedTime && !firstImageReadyLogged) {
+      firstImageReadyLogged = true;
+      const readyDur = Math.round(((typeof performance !== 'undefined') ? performance.now() : Date.now()) - readerDetectedTime);
+      pipelineTelemetry.firstImageReadyMs = readyDur;
+      console.log(`[ComicCapture] 🖼️【首屏加载耗时】阅读器锁定至首图就绪耗时: ${readyDur}ms (尺寸: ${entries[0].img.naturalWidth}x${entries[0].img.naturalHeight})`);
+    }
+
     if (invalidated) {
       coordinateIndex = null;
       coordinateSnapshot = null;
@@ -1268,6 +1698,9 @@
     }
 
     lastOrder = next;
+    if (!running && !starting) {
+      schedulePrewarm(120);
+    }
     notify();
   }
 
@@ -1279,7 +1712,6 @@
   async function ensureAllImagesLoaded(targetReader, signal) {
     if (!targetReader?.root?.isConnected) return;
     promoteLazyImages(targetReader.root);
-    await new Promise(r => setTimeout(r, 80));
   }
 
   async function clearAllPageCaches() {
@@ -1481,6 +1913,17 @@
 
   async function start() {
     if (starting || running || stopping) return;
+    startClickTime = (typeof performance !== 'undefined') ? performance.now() : Date.now();
+    pipelineTelemetry.clickToSlice0ReadyMs = 0;
+    pipelineTelemetry.clickToFirstOcrMs = 0;
+    pipelineTelemetry.slice0OcrDurationMs = 0;
+    pipelineTelemetry.slices1To5AllOcrReadyMs = 0;
+    pipelineTelemetry.firstLlmTtfbMs = 0;
+    pipelineTelemetry.firstLlmTotalMs = 0;
+    pipelineTelemetry.slice0Bubbles = 0;
+    pipelineTelemetry.first6SlicesBubbles = 0;
+    pipelineTelemetry.totalSlicesOcrCompleted = 0;
+
     const readerAtStart = reader;
     if (!reader?.root?.isConnected) {
       statusText = '未找到漫画阅读区';
@@ -1534,8 +1977,7 @@
     statusText = isLocal ? `正在连接本地 OCR 服务 (${API})...` : '正在连接云端 OCR 引擎...';
     notify();
     try {
-      const response = await fetch(`${API}/health`);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      await ensureBackendHealthy(API);
     } catch (err) {
       starting = false;
       abortController = null;
@@ -1630,6 +2072,7 @@
         completedSlices = [...completedSlices.filter(item => item.sliceIndex !== slice.sliceIndex), slice]
           .sort((a, b) => a.sliceIndex - b.sliceIndex);
         const rawBubbles = batchMeta?.result?.bubbles || [];
+
         // 幽灵框分流：如果后端返回了 role / is_ghost，全量保留（由 renderPatches 分配实心补丁 vs 幽灵透明框）
         const bubbles = rawBubbles.filter(b => {
           if (b.role || typeof b.is_ghost === 'boolean') {
@@ -1641,9 +2084,10 @@
           patchesBySlice.set(slice.sliceIndex, bubbles);
         }
         const ghostCount = bubbles.filter(b => b.is_ghost || b.role === 'sfx_ghost').length;
-        const dialogueCount = bubbles.length - ghostCount;
-        statusText = `已识别 ${completed} 片 (${dialogueCount} 处对白${ghostCount > 0 ? `，${ghostCount} 处幽灵框` : ''})${batchMeta?.isFinalBatch ? ' [最终完成]' : ''}`;
-        console.log(`[ComicCapture] 切片 #${completed} 识别完成: Y=${slice.startY}~${slice.endY}px, 对白: ${dialogueCount} 个, 幽灵框: ${ghostCount} 个`);
+        const ambientCount = bubbles.filter(b => b.role === 'ambient').length;
+        const dialogueCount = bubbles.length - ghostCount - ambientCount;
+        statusText = `已识别 ${completed} 片 (${dialogueCount} 处对白${ambientCount > 0 ? `，${ambientCount} 处背景词` : ''}${ghostCount > 0 ? `，${ghostCount} 处拟声词` : ''})${batchMeta?.isFinalBatch ? ' [最终完成]' : ''}`;
+        console.log(`[ComicCapture] 切片 #${completed} 识别完成: Y=${slice.startY}~${slice.endY}px, 对白: ${dialogueCount} 个, 背景词: ${ambientCount} 个, 拟声词: ${ghostCount} 个`);
         notify();
         void checkFrontierState();
 
@@ -1651,6 +2095,24 @@
         slice._ocrSentAt = batchMeta?.result?._ocrSentAt || '';
         slice._ocrReceivedAt = batchMeta?.result?._ocrReceivedAt || '';
         slice._api = batchMeta?.result?._api || API;
+        if (completed === 1) {
+          const clickToFirstOcrMs = Math.round(((typeof performance !== 'undefined') ? performance.now() : Date.now()) - startClickTime);
+          slice._clickToOcrMs = clickToFirstOcrMs;
+          pipelineTelemetry.clickToSlice0ReadyMs = slice._sliceCreatedAt ? Math.max(0, Math.round(slice._sliceCreatedAt - startClickTime)) : 0;
+          pipelineTelemetry.clickToFirstOcrMs = clickToFirstOcrMs;
+          pipelineTelemetry.slice0OcrDurationMs = slice._ocrTimeMs;
+          pipelineTelemetry.slice0Bubbles = bubbles.length;
+          console.log(`[ComicCapture] ⚡【首屏耗时统计】从点击按钮到首切片 OCR 完成上屏: ${clickToFirstOcrMs}ms (首切片生成: ${pipelineTelemetry.clickToSlice0ReadyMs}ms, 纯OCR网络: ${slice._ocrTimeMs}ms, 检出气泡: ${bubbles.length}个)`);
+        }
+
+        pipelineTelemetry.totalSlicesOcrCompleted = completed;
+        if (slice.sliceIndex <= 6) {
+          pipelineTelemetry.first6SlicesBubbles += bubbles.length;
+        }
+        if (completed === 6 || (batchMeta?.isFinalBatch && completed < 6)) {
+          pipelineTelemetry.slices1To5AllOcrReadyMs = Math.round(((typeof performance !== 'undefined') ? performance.now() : Date.now()) - startClickTime);
+          console.log(`[ComicCapture] 📊【前6切片OCR全就绪】从点击到前6片OCR就绪: ${pipelineTelemetry.slices1To5AllOcrReadyMs}ms, 累计气泡: ${pipelineTelemetry.first6SlicesBubbles}个`);
+        }
 
         // 🌟 触发前端大模型直连流式翻译 (若选择 none 学习模式则自动跳过直连)
         if (bubbles.length > 0) {
@@ -1741,6 +2203,8 @@
     const oldRoot = reader?.root;
     reader = nextReader;
     if (oldRoot !== reader?.root) {
+      readerDetectedTime = (typeof performance !== 'undefined') ? performance.now() : Date.now();
+      firstImageReadyLogged = false;
       captureStats = { attribute: 0, observer: 0 };
       readerResizeObserver?.disconnect();
       if (overlayHost && overlayHost.parentElement && overlayHost.parentElement !== reader?.root) {
@@ -1759,6 +2223,7 @@
       ensureOverlay();
     } else if (overlayHost) overlayHost.style.display = 'none';
     updateEntries();
+    schedulePrewarm(80);
   }
 
   function togglePreview() {
@@ -1836,11 +2301,45 @@
       if (!coordinateIndex) throw new Error('当前没有有效的章节坐标系');
       return ComicVirtualStrip.projectBox(coordinateIndex, absoluteBox);
     },
+    getLivePatches() {
+      const list = [];
+      for (const [key, el] of patchElements) {
+        list.push({
+          key,
+          className: el.className,
+          top: parseFloat(el.style.top) || 0,
+          left: parseFloat(el.style.left) || 0,
+          width: parseFloat(el.style.width) || 0,
+          height: parseFloat(el.style.height) || 0,
+          text: el.querySelector('.manga-patch-text')?.textContent || ''
+        });
+      }
+      return list;
+    },
+    getAllSliceBubbles() {
+      const list = [];
+      const sortedSlices = [...completedSlices].sort((a, b) => a.sliceIndex - b.sliceIndex);
+      for (const slice of sortedSlices) {
+        const bubbles = patchesBySlice.get(slice.sliceIndex) || [];
+        list.push({
+          sliceIndex: slice.sliceIndex,
+          slice,
+          bubbles
+        });
+      }
+      return list;
+    },
     setStatusListener(listener) { statusListener = typeof listener === 'function' ? listener : () => {}; notify(); },
     clearCaches: clearAllPageCaches,
     getStats() {
       const observerCount = entries.filter(entry => entry.img.dataset.comicMethod === 'observer').length;
       return { attribute: entries.length - observerCount, observer: observerCount };
+    },
+    getPipelineTelemetry() {
+      return {
+        ...pipelineTelemetry,
+        prewarm: { ...pipelineTelemetry.prewarm }
+      };
     }
   });
 })();

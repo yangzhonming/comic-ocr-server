@@ -41,52 +41,70 @@ def extract_colors_fast(
 
     tc_crop = image[by1:by2, bx1:bx2]
 
-    # 1. 提取四周边界环 (Border Ring)
-    pad = max(2, min(6, int(round(min(bw, bh) * 0.08))))
-    rx1 = max(0, bx1 - pad)
-    ry1 = max(0, by1 - pad)
-    rx2 = min(w, bx2 + pad)
-    ry2 = min(h, by2 + pad)
+    # 1. 提取四向十字外缘中段条带 (Cross-Cardinal Mid-Strip Sampling)
+    # 彻底避开内切椭圆四角（防止刺穿气泡触碰外部原画），同时外扩 8~24px 彻底越过文字自身描边光晕
+    pad = max(8, min(24, int(round(min(bw, bh) * 0.14))))
+    thick = max(2, min(4, int(round(pad * 0.3))))
 
-    ring_crop = image[ry1:ry2, rx1:rx2]
-    rh, rw = ring_crop.shape[:2]
-    ring_thick = max(1, min(3, pad))
+    x_mid1 = bx1 + int(0.20 * bw)
+    x_mid2 = bx2 - int(0.20 * bw)
+    y_mid1 = by1 + int(0.20 * bh)
+    y_mid2 = by2 - int(0.20 * bh)
+
+    t_y1 = max(0, by1 - pad)
+    t_y2 = max(0, by1 - pad + thick)
+    top_strip = image[t_y1:t_y2, x_mid1:x_mid2] if t_y2 > t_y1 and x_mid2 > x_mid1 else np.empty((0, 3), dtype=np.uint8)
+
+    b_y1 = min(h - thick, by2 + pad - thick)
+    b_y2 = min(h, by2 + pad)
+    bot_strip = image[b_y1:b_y2, x_mid1:x_mid2] if b_y2 > b_y1 and x_mid2 > x_mid1 else np.empty((0, 3), dtype=np.uint8)
+
+    l_x1 = max(0, bx1 - pad)
+    l_x2 = max(0, bx1 - pad + thick)
+    left_strip = image[y_mid1:y_mid2, l_x1:l_x2] if l_x2 > l_x1 and y_mid2 > y_mid1 else np.empty((0, 3), dtype=np.uint8)
+
+    r_x1 = min(w - thick, bx2 + pad - thick)
+    r_x2 = min(w, bx2 + pad)
+    right_strip = image[y_mid1:y_mid2, r_x1:r_x2] if r_x2 > r_x1 and y_mid2 > y_mid1 else np.empty((0, 3), dtype=np.uint8)
+
+    valid_strips = [s for s in [top_strip, bot_strip, left_strip, right_strip] if s.size > 0]
 
     try:
-        top = ring_crop[:ring_thick, :].reshape(-1, 3)
-        bottom = ring_crop[-ring_thick:, :].reshape(-1, 3)
-        left = ring_crop[ring_thick:-ring_thick, :ring_thick].reshape(-1, 3)
-        right = ring_crop[ring_thick:-ring_thick, -ring_thick:].reshape(-1, 3)
+        if valid_strips:
+            all_px = np.vstack([s.reshape(-1, 3) for s in valid_strips])
+            strip_medians = [np.median(s.reshape(-1, 3), axis=0) for s in valid_strips]
+            bg_color = np.median(strip_medians, axis=0).astype(np.uint8)
 
-        parts = [p for p in [top, bottom, left, right] if len(p) > 0]
-        ring_pixels = np.vstack(parts) if parts else ring_crop.reshape(-1, 3)
+            # 量化至 16 阶统计色彩众数与纯净度结构
+            quantized = (all_px // 16).astype(np.int32)
+            color_keys = quantized[:, 0] * 256 + quantized[:, 1] * 16 + quantized[:, 2]
+            vals, counts = np.unique(color_keys, return_counts=True)
+            sorted_counts = np.sort(counts)[::-1]
 
-        # 量化至 16 阶统计色彩众数与纯净度结构
-        quantized = (ring_pixels // 16).astype(np.int32)
-        color_keys = quantized[:, 0] * 256 + quantized[:, 1] * 16 + quantized[:, 2]
-        vals, counts = np.unique(color_keys, return_counts=True)
-        sorted_counts = np.sort(counts)[::-1]
-        max_idx = int(np.argmax(counts))
-        mode_key = vals[max_idx]
+            total_px = max(1, len(all_px))
+            top1_purity = float(sorted_counts[0]) / float(total_px)
+            top3_purity = float(sum(sorted_counts[:3])) / float(total_px) if len(sorted_counts) >= 3 else top1_purity
+            num_colors = len(vals)
 
-        total_ring_pixels = max(1, len(ring_pixels))
-        top1_purity = float(sorted_counts[0]) / float(total_ring_pixels)
-        top3_purity = float(sum(sorted_counts[:3])) / float(total_ring_pixels) if len(sorted_counts) >= 3 else top1_purity
-        num_colors = len(vals)
+            # 四向中值亮度一致性 (标准差越小，背景越均匀平滑)
+            strip_med_lums = [0.299 * float(m[2]) + 0.587 * float(m[1]) + 0.114 * float(m[0]) for m in strip_medians]
+            lum_std = float(np.std(strip_med_lums))
+            is_messy = bool(top1_purity < 0.35 and num_colors > 45 and lum_std > 40.0)
+        else:
+            bg_color = np.array([255, 255, 255], dtype=np.uint8)
+            top1_purity = 1.0
+            top3_purity = 1.0
+            num_colors = 1
+            lum_std = 0.0
+            is_messy = False
 
-        # 杂乱背景判定 (排除平滑渐变气泡):
-        # 渐变气泡颜色集中 (Top3 >= 60% 且颜色桶 <= 30)；插画杂乱背景高度散开 (Top3 < 60% 或 颜色桶 > 30)
-        is_messy = bool(top1_purity < 0.45 and (top3_purity < 0.60 or num_colors > 30))
         bg_meta = {
             "top1": top1_purity,
             "top3": top3_purity,
             "num_colors": num_colors,
+            "lum_std": lum_std,
             "is_messy": is_messy
         }
-
-        mode_mask = (color_keys == mode_key)
-        mode_pixels = ring_pixels[mode_mask]
-        bg_color = np.median(mode_pixels, axis=0).astype(np.uint8)
 
         # 2. 对文字核心区进行 2-中心 KMeans 聚类提取前景色
         ch, cw = tc_crop.shape[:2]

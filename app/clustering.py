@@ -1,3 +1,4 @@
+import re
 from collections import Counter
 from typing import List, Dict, Any, Optional, Tuple
 import cv2
@@ -16,49 +17,43 @@ def classify_bubble_role(
     fg_hex: str,
     text: str,
     purity: Any = 1.0
-) -> Tuple[str, bool]:
+) -> Tuple[Optional[str], bool, str, str]:
     """
-    分层短路物理特征决策树 (Short-Circuit Physical Decision Tree):
-    精准区分正规对白气泡(dialogue)、画外音(narration)与拟声词幽灵框(sfx_ghost)。
-    核心判据：
-    1. 四周环取色纯净度与平滑渐变保护护盾 (Border Ring Purity & Gradient Shield):
-       - 纯色气泡 (Top1 >= 45%): 允许进入常规 dialogue 判定
-       - 平滑渐变气泡 (Top3 >= 60% 且 颜色桶 <= 30): 判定为平滑渐变底色气泡容器，严禁误杀为拟声词！
-       - 杂乱插画背景 (Top1 < 45% 且 Top3 < 60% 或 颜色桶 > 30): 100% 确认印在原画特效中，
-         一票剥夺正规 dialogue 实心补丁资格，依字长与尺度精准归流至 sfx_ghost (幽灵点读) 或 narration (透明描边)。
-    2. 4-角块自适应方差与背景色一致性
-    3. 气泡底色物理特征 (白底黑字、黑底白字心理话、淡彩浅色气泡)
-    4. 前景与背景高对比度判定
-    单框计算耗时 < 0.2ms，跨语言通用。
-    返回: (role, is_ghost)
+    分层物理与语义决策树 (Hierarchical Physical & Semantic Decision Tree):
+    输出: (role, is_ghost, surface, render_mode)
+    若返回 (None, False, surface, "drop") 则代表衣服Logo或环境杂质，调用方直接丢弃不输出！
+    
+    分类通道:
+    1. 通道 A (纯白气泡): 亮度 >= 215, 饱和度 <= 25 -> solid_patch (实心白羽化气泡)
+    2. 通道 B (平滑非白): 渐变气泡 / 窗户背景音 -> glow_patch (半透明柔和羽化光罩，绝不糊死原画)
+    3. 通道 C (复杂杂乱背景):
+       - 彩色高饱和 / 白色中空字 / 巨大字号 -> sfx_overlay (拟声词加深覆盖)
+       - 具有对话标点 (~!?...¡¿) / 黑色字芯 -> outlined_overlay (纯透明底 + 纯白高密度描边悬浮)
+       - 既非SFX、又非画外音且完全无标点 -> 衣服Logo/场景道具，直接 drop 丢弃！
     """
     if image is None:
-        return "dialogue", False
+        return "dialogue", False, "white_solid", "solid_patch"
 
     h_img, w_img = image.shape[:2]
     bx, by, bw, bh = bubble_box
-    clean_text = text.replace('\n', '').strip()
+    clean_text = text.replace('\n', ' ').strip()
 
-    # 移动端 390 宽度的 8.5% 标尺换算切片标准行高
     h_std = w_img * 0.085
     height_ratio = avg_line_h / max(1.0, h_std)
 
-    # 解析背景纯度与杂乱度 (兼容 dict 或 float)
+    # 提取纯净度与空间一致性指标
     if isinstance(purity, dict):
-        is_messy = purity.get("is_messy", False)
         top1_purity = purity.get("top1", 1.0)
+        top3_purity = purity.get("top3", 1.0)
+        num_colors = purity.get("num_colors", 1)
+        lum_std = purity.get("lum_std", 0.0)
+        is_messy = purity.get("is_messy", False)
     else:
         top1_purity = float(purity)
+        top3_purity = top1_purity
+        num_colors = 1
+        lum_std = 0.0
         is_messy = (top1_purity < 0.50)
-
-    # === 【首要核心判据】四周环纯净度与插画杂乱护盾 ===
-    # 若被判定为杂乱插画背景 (非纯色且非平滑渐变)，坚决剥夺常规对话框 (dialogue) 资格，杜绝前端大补丁
-    if is_messy:
-        # 短词/招式名/拟声词 (字符数 <= 15 或相对字高较大) -> 幽灵框 (默认零遮盖透明，悬停点读)
-        if len(clean_text) <= 15 or height_ratio > 1.2:
-            return "sfx_ghost", True
-        # 复杂画面上的叙事长句 -> 画外音/旁白 (透明底 + 高反差双描边字，保全原画)
-        return "narration", False
 
     def _hex_to_lum_sat(hex_str: str) -> Tuple[float, float]:
         c = hex_str.lstrip('#')
@@ -71,79 +66,46 @@ def classify_bubble_role(
 
     bg_lum, bg_sat = _hex_to_lum_sat(bg_hex)
     fg_lum, fg_sat = _hex_to_lum_sat(fg_hex)
-    contrast = abs(bg_lum - fg_lum)
 
-    # 采样 4 个外围角落 (采用角落采样替代连续边缘条采样，彻底避免文本尾部标点符号或紧凑框边缘碰笔画导致方差失真)
-    pad = 6
-    ox1, oy1 = max(0, bx - pad), max(0, by - pad)
-    ox2, oy2 = min(w_img, bx + bw + pad), min(h_img, by + bh + pad)
-    outer_crop = image[oy1:oy2, ox1:ox2]
+    # 对话情绪标点与对白特征判断
+    has_dialogue_punct = bool(re.search(r'[~?¿¡!]|\.{2,}', clean_text))
+    has_dialogue_words = bool(re.search(r'\b(?:de|que|un|una|los|las|el|la|es|con|en|por|para|the|and|you|that|was|for|are|with|his|they|난|이|그|저|에|는|은|가|을|를)\b', clean_text, re.IGNORECASE))
+    is_dialogue_text = has_dialogue_punct or has_dialogue_words
+    is_multi_line = (lines_count >= 2)
 
-    ch, cw = outer_crop.shape[:2]
-    k = max(2, min(6, ch // 2, cw // 2)) if (ch >= 4 and cw >= 4) else 1
-    corners = [
-        outer_crop[0:k, 0:k],
-        outer_crop[0:k, -k:],
-        outer_crop[-k:, 0:k],
-        outer_crop[-k:, -k:],
-    ]
-    cvars = [float(np.var(cv2.cvtColor(c, cv2.COLOR_BGR2GRAY))) for c in corners if c.size > 0]
-    cmeans = [float(np.mean(cv2.cvtColor(c, cv2.COLOR_BGR2GRAY))) for c in corners if c.size > 0]
+    # === 【通道 A: 纯白标准气泡】===
+    # 纯度高、亮度极高、无色彩饱和度、颜色桶集中
+    is_pure_white = (bg_lum >= 215.0 and bg_sat <= 25.0 and num_colors <= 28)
+    if is_pure_white:
+        return "dialogue", False, "white_solid", "solid_patch"
 
-    # 平整角块判定 (方差 <= 40 说明是平滑纯色)
-    flat_corners = [i for i, v in enumerate(cvars) if v <= 40.0]
-    # 角块灰度与采样背景色一致性 (差值 <= 45 说明与气泡底色属于同一种纯净底色)
-    matching_flat_corners = [i for i in flat_corners if abs(cmeans[i] - bg_lum) <= 45.0]
-    num_matching_flat = len(matching_flat_corners)
+    # === 【通道 B: 平滑非白底色 (渐变气泡 / 平滑窗户/天空)】===
+    # 1. 颜色高度集中 (纯色非白气泡，如浅灰/淡黄/淡青底色):
+    is_solid_nonwhite = (num_colors <= 28 and top3_purity >= 0.55)
+    # 2. 渐变色气泡:
+    #    - 多行对白排版且具有对白自然句式特征，背景为明亮彩色气泡 (bg_sat >= 25, bg_lum >= 120，如天蓝/樱粉/薄荷渐变框)
+    #    - 或带有对话情绪标点 (~!?...¡¿)，且四向亮度平滑 (lum_std <= 35 且 bg_lum >= 90)
+    is_gradient_bubble = (is_multi_line and is_dialogue_text and bg_sat >= 25.0 and bg_lum >= 120.0) or \
+                         (has_dialogue_punct and (num_colors <= 50 or lum_std <= 35.0) and bg_lum >= 90.0)
+    if is_solid_nonwhite or is_gradient_bubble:
+        return "dialogue", False, "smooth_bg", "glow_patch"
 
-    # 气泡底色特征 (白底黑字、黑底白字心理话、浅色/淡彩气泡)
-    is_light_bubble = (bg_lum >= 150.0 and bg_sat <= 45.0)
-    is_dark_bubble = (bg_lum <= 95.0 and bg_sat <= 35.0)
-    is_pastel_bubble = (bg_lum >= 160.0 and bg_sat <= 70.0)
-    is_speech_bubble_color = (is_light_bubble or is_dark_bubble or is_pastel_bubble)
+    # === 【通道 C: 复杂杂乱背景 (衣服 / 场景道具 / 悬浮画外音 / 拟声词)】===
+    # 1. 拟声词三大经典视觉特征 (鲜艳彩字、白色中空字、极端巨大字号且有一定色彩)
+    is_vivid_color = (fg_sat >= 35.0)
+    is_hollow_font = (avg_fill_ratio < 0.18)
+    is_huge_scale = (height_ratio > 2.0 and fg_sat >= 15.0)
+    if is_vivid_color or is_hollow_font or is_huge_scale:
+        return "sfx", True, "textured", "sfx_overlay"
 
-    # Layer 1: 【一票肯定权】标准对白气泡判定 (Bubble Immersion)
-    # 只要符合气泡底色特征且图文有良好对比度:
-    if is_speech_bubble_color and contrast >= 35.0:
-        # 1. 至少 2 个角落平整纯净并与底色一致且非杂乱插画 -> 绝大多数正规气泡
-        if num_matching_flat >= 2 and not is_messy:
-            return "dialogue", False
-        # 2. 至少 1 个角落平整且是多行或多字对白且非杂乱插画 -> 异形/椭圆紧凑对白气泡
-        if num_matching_flat >= 1 and not is_messy and (lines_count >= 2 or len(clean_text) >= 4):
-            return "dialogue", False
-        # 3. 极高明度纯白背景 (底色 >= 220 纯白画布) 且有多字文本 -> 必定为对话气泡
-        if bg_lum >= 220.0 and bg_sat <= 25.0 and not is_messy and (lines_count >= 2 or len(clean_text) >= 3):
-            return "dialogue", False
+    # 2. 画外音: 必须具备对话情绪标点 (~!?...¡¿) 且多字成词
+    # 坚决废除无脑 len >= 7 判定，杜绝衣服 Logo (如 REAMERS, BETTER TOGETHER) 误入画外音！
+    if has_dialogue_punct and len(clean_text) >= 3:
+        return "ambient", False, "textured", "outlined_overlay"
 
-    # Layer 2: 【一票否决权】拟声词/环境字检测 (SFX Ghost)
-    # 1. 高饱和彩色字体 (漫画中鲜艳彩字几乎都是拟声词/环境字)
-    if fg_sat >= 45.0:
-        return "sfx_ghost", True
-
-    # 2. 极端尺度 (超大招式字/音效字，或无平滑底色的过小杂字)
-    if (height_ratio > 2.2 or height_ratio < 0.40) and num_matching_flat == 0:
-        return "sfx_ghost", True
-
-    # 3. 空心字/畸变笔画
-    if (avg_fill_ratio < 0.12 or avg_fill_ratio > 0.58) and not is_speech_bubble_color:
-        return "sfx_ghost", True
-
-    # 4. 背景杂乱 (无任何平滑纯色角落，说明直接绘制在插画/画面上)
-    if num_matching_flat == 0 and cvars and min(cvars) > 80.0:
-        # 短词/拟声词直接进入幽灵框
-        if len(clean_text) <= 15:
-            return "sfx_ghost", True
-        # 复杂画面上的中性长句 -> 画外音/旁白 (保全原画)
-        return "narration", False
-
-    # Layer 3: 【兜底裁决】
-    if is_speech_bubble_color:
-        return "dialogue", False
-
-    if len(clean_text) <= 3:
-        return "sfx_ghost", True
-
-    return "dialogue", False
+    # 3. 衣服 Logo / 货架杂质最后决断:
+    # 既不是拟声词，又无对话标点 -> 100% 确认是衣服印花/道具，直接 drop 丢弃！
+    return None, False, "textured", "drop"
 
 
 class TextLineItem:
@@ -155,9 +117,9 @@ class TextLineItem:
         bbox: list,  # [x1, y1, x2, y2]
         text: str,
         score: float,
-        bg_color: str,
-        text_color: str,
-        fill_ratio: float
+        bg_color: str = "#FFFFFF",
+        text_color: str = "#000000",
+        fill_ratio: float = 0.3
     ):
         self.bbox = bbox
         self.x = int(bbox[0])
@@ -227,6 +189,27 @@ def should_merge_detailed(
     is_x_overlapped = (x_overlap > min(aw, bw) * x_overlap_ratio) or (x_overlap > local_char_size)
 
     if is_x_overlapped:
+        # === 核心排版对齐检测 (Center / Left / Right Alignment Check) ===
+        # 韩漫/条漫对白气泡以居中对齐为主，矩形短信/旁白框以左对齐为主。
+        center_x_a = ax + aw / 2.0
+        center_x_b = bx + bw / 2.0
+        center_x_diff = abs(center_x_a - center_x_b)
+        left_diff = abs(ax - bx)
+        right_diff = abs((ax + aw) - (bx + bw))
+
+        # 动态容差：兼顾高分辨率原图与小字号短句，宽容度合理避免误切
+        center_tol = max(14.0, local_char_size * 0.48, min(aw, bw) * 0.28)
+        left_tol = max(12.0, local_char_size * 0.38)
+        right_tol = max(12.0, local_char_size * 0.38)
+
+        is_center_aligned = center_x_diff <= center_tol
+        is_left_aligned = left_diff <= left_tol
+        is_right_aligned = right_diff <= right_tol
+
+        # 若中心、左缘、右缘三者均不满足对齐（例如角标、旁边飘浮的小字），坚决禁止垂直合并！
+        if not (is_center_aligned or is_left_aligned or is_right_aligned):
+            return False, f"rule_b_alignment_rejected (center_diff={center_x_diff:.1f} > {center_tol:.1f})"
+
         if v_gap <= 0:
             if abs(center_y_a - center_y_b) < max(ah, bh) * vertical_gap_ratio:
                 return True, "rule_b_overlap_line"
@@ -355,8 +338,8 @@ def cluster_text_lines(
 
         avg_score = sum(item.score for item in component) / len(component)
 
-        # 物理特征短路决策树裁决 role 与 is_ghost
-        role, is_ghost = classify_bubble_role(
+        # 物理特征短路决策树裁决 role, is_ghost, surface, render_mode
+        role, is_ghost, surface, render_mode = classify_bubble_role(
             image=image,
             bubble_box=box_rel,
             lines_count=len(lines),
@@ -367,6 +350,10 @@ def cluster_text_lines(
             text=merged_text,
             purity=purity
         )
+
+        # 衣服Logo / 场景杂质截杀: 若被判定为 drop，坚决丢弃不输出！
+        if role is None or render_mode == "drop":
+            continue
 
         bubbles.append(
             BubbleItem(
@@ -379,7 +366,9 @@ def cluster_text_lines(
                 weight=font_weight,
                 score=round(avg_score, 3),
                 role=role,
-                is_ghost=is_ghost
+                is_ghost=is_ghost,
+                surface=surface,
+                render_mode=render_mode
             )
         )
 

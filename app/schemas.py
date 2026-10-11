@@ -27,11 +27,19 @@ class BubbleItem(BaseModel):
     score: float = Field(1.0, description="OCR 识别平均置信度 (0.0 ~ 1.0)")
     role: str = Field(
         "dialogue",
-        description="文本角色类型: dialogue(正规对白气泡), narration(画外音/旁白), sfx_ghost(拟声词幽灵框)"
+        description="文本角色类型: dialogue(正规对白气泡), narration(画外音/旁白), ambient(场景悬浮字), sfx_ghost(拟声词美术字)"
     )
     is_ghost: bool = Field(
         False,
-        description="是否为幽灵框 (true时前端默认不上屏盖白块，翻译时不占用Token，支持按需点读)"
+        description="是否为幽灵/美术字框 (true时零背景遮盖原画，以漫画美术字高反差描边呈现)"
+    )
+    surface: str = Field(
+        "white_solid",
+        description="文字所处的背景物理材质: white_solid(纯白气泡), smooth_bg(平滑渐变/窗户/墙面), textured(复杂杂乱背景)"
+    )
+    render_mode: str = Field(
+        "solid_patch",
+        description="前端渲染指令: solid_patch(实心白色羽化补丁), glow_patch(半透明柔和羽化光罩), sfx_overlay(拟声词加深覆盖), outlined_overlay(纯白高密度描边悬浮)"
     )
 
 

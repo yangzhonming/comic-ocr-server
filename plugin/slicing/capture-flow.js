@@ -6,14 +6,32 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function (strip, pixels, pipeline, algorithm) {
   "use strict";
 
+  const preprobedMap = new Map();
+
+  function preprobe(entry) {
+    if (!entry || !entry.url) return Promise.resolve(null);
+    if (preprobedMap.has(entry.imageId)) return Promise.resolve(preprobedMap.get(entry.imageId));
+    return probe(entry).then(res => {
+      if (res && res.sourceWidth > 0 && res.sourceHeight > 0) {
+        preprobedMap.set(entry.imageId, res);
+      }
+      return res;
+    }).catch(() => null);
+  }
+
   function probe(entry, signal) {
     if (signal?.aborted) return Promise.reject(new DOMException("Capture cancelled", "AbortError"));
+    if (preprobedMap.has(entry.imageId)) {
+      return Promise.resolve(preprobedMap.get(entry.imageId));
+    }
     // Already rendered images expose their intrinsic dimensions without another request.
-    if (entry.img?.complete && entry.img.currentSrc === entry.url &&
-        entry.img.naturalWidth > 0 && entry.img.naturalHeight > 0) {
-      return Promise.resolve({pageIndex: entry.pageIndex, imageId: entry.imageId,
+    if (entry.img?.complete && entry.img.naturalWidth > 0 && entry.img.naturalHeight > 0 &&
+        (entry.img.currentSrc === entry.url || entry.img.src === entry.url || !entry.img.currentSrc)) {
+      const res = {pageIndex: entry.pageIndex, imageId: entry.imageId,
         sourceWidth: entry.img.naturalWidth, sourceHeight: entry.img.naturalHeight,
-        url: entry.url});
+        url: entry.url};
+      preprobedMap.set(entry.imageId, res);
+      return Promise.resolve(res);
     }
     return new Promise((resolve, reject) => {
       const image = new Image();
@@ -349,7 +367,8 @@
             height: endY - startY,
             sourcePages: pages,
             cutMethod: analysis?.selected?.method || (endY === index.totalHeight ? "chapter-end" : "standard"),
-            blob
+            blob,
+            _sliceCreatedAt: (typeof performance !== 'undefined') ? performance.now() : Date.now()
           };
 
           startY = endY;
@@ -494,5 +513,18 @@
     }
   }
 
-  return { probe, upload, uploadCoordinates, uploadCapture, createSession, run, DEFAULT_CONCURRENCY, DEFAULT_BATCH_SIZE: 6, DEFAULT_FLUSH_INTERVAL_MS: 0 };
+  return {
+    probe,
+    preprobe,
+    clearPreprobed() { preprobedMap.clear(); },
+    getPreprobedCount() { return preprobedMap.size; },
+    upload,
+    uploadCoordinates,
+    uploadCapture,
+    createSession,
+    run,
+    DEFAULT_CONCURRENCY,
+    DEFAULT_BATCH_SIZE: 6,
+    DEFAULT_FLUSH_INTERVAL_MS: 0
+  };
 });
