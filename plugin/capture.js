@@ -874,7 +874,7 @@
   function cleanTranslatedText(text) {
     if (!text || typeof text !== 'string') return '';
     return text
-      .replace(/^(?:\[\d+\]|\d+[\.、：:])\s*/, '') // 彻底剥离行号 [0] 或 0. 避免标号污染漫画文本
+      .replace(/^(?:\[(S\d+_\d+|\d+)\]|(S\d+_\d+|\d+)[\.、：:])\s*/i, '') // 彻底剥离行号 [S1_0] 或 [0] 或 0. 避免标号污染漫画文本
       .replace(/^[*_~`]+|[*_~`]+$/g, '') // 剥离 markdown 粗体/反引号
       .replace(/^(旁白|对白|内心独白|拟声词|译文|翻译|Chinese|Translation)\s*[:：]\s*/i, '') // 剥离多余角色/翻译前缀
       .replace(/^["'“”‘’]+|["'“”‘’]+$/g, '') // 剥离多余外层引号
@@ -955,21 +955,116 @@
     }
   }
 
-  async function translateSliceBubbles(slice, bubbles) {
+  // ========================================================
+  // 前端大模型双轨调度流水线 (Dual-Track LLM Pipeline)
+  // 轨一: Fast-Lane 首片特快直发 (免等待，600~800ms 首字即时上屏)
+  // 轨二: Relay-Bucket 场景大包接力 (12~15 气泡 / 800ms 动态聚合)
+  // ========================================================
+  const llmRelayBucket = {
+    items: [],
+    timer: null
+  };
+
+  function resetLlmBucket() {
+    if (llmRelayBucket.timer) {
+      clearTimeout(llmRelayBucket.timer);
+      llmRelayBucket.timer = null;
+    }
+    llmRelayBucket.items = [];
+  }
+
+  function dispatchBubblesToLLM(slice, bubbles, batchMeta) {
     if (!slice || !bubbles || !bubbles.length) return;
     const activeModel = globalThis.ComicLLMStore?.getActiveModel ? globalThis.ComicLLMStore.getActiveModel() : 'none';
+    if (!activeModel || activeModel === 'none') return;
 
-    // 1. none 模式 (仅看原文·学习模式)：跳过大模型调用，直接依赖 getBubbleDisplayText
-    if (!activeModel || activeModel === 'none') {
+    const currentLang = (globalThis.ComicLLMStore?.getOcrLang ? globalThis.ComicLLMStore.getOcrLang() : null) || 'kr';
+
+    // 格式化当前切片的可翻译气泡，赋予唯一物理 ID: [S{sliceIndex}_{bubbleIndex}]
+    const translatableItems = [];
+    bubbles.forEach((b, bIdx) => {
+      const orig = (b.text || '').trim();
+      if (orig) {
+        const isJa = (currentLang === 'ja') || /[\u3040-\u30ff]/.test(orig);
+        const normalized = isJa
+          ? orig.replace(/\r?\n+/g, '').replace(/\s+/g, ' ').trim()
+          : orig.replace(/\r?\n+/g, ' ').replace(/\s+/g, ' ').trim();
+        b.normalizedText = normalized;
+        translatableItems.push({
+          slice,
+          sliceIndex: slice.sliceIndex,
+          bubble: b,
+          bubbleIndex: bIdx,
+          id: `S${slice.sliceIndex}_${bIdx}`,
+          normalizedText: normalized
+        });
+      }
+    });
+
+    if (translatableItems.length === 0) return;
+
+    // 🌟 轨一：首屏特快车道 (Fast-Lane, Slice 0 / sliceIndex === 1)
+    // 豁免任何聚合等待，立即独享直发，确保首屏秒级上屏！
+    if (slice.sliceIndex === 1) {
+      void translateBatchItems(translatableItems, {
+        isFastTrack: true,
+        sliceTag: `首片特快 (#1)`,
+        sliceIndex: 1
+      });
       return;
     }
+
+    // 🌟 轨二：场景大包接力车道 (Relay-Bucket, Slices 1~N)
+    // 将气泡推入聚合池
+    llmRelayBucket.items.push(...translatableItems);
+
+    const isFinalBatch = Boolean(batchMeta?.isFinalBatch);
+    const BUBBLE_THRESHOLD = 14; // 基于移动端实测黄金区间 12~15 气泡
+
+    // 触发条件 1: 累计气泡达到 14 个场景上限
+    // 触发条件 2: 最后一批切片 (Final Batch) 立即收尾清空
+    if (llmRelayBucket.items.length >= BUBBLE_THRESHOLD || isFinalBatch) {
+      flushLlmBucket(isFinalBatch ? '最终收尾大包' : '场景大包');
+    } else if (!llmRelayBucket.timer) {
+      // 触发条件 3: 800ms 超时保底发车，绝不长时间挂起
+      llmRelayBucket.timer = setTimeout(() => {
+        llmRelayBucket.timer = null;
+        flushLlmBucket('超时保底大包');
+      }, 800);
+    }
+  }
+
+  function flushLlmBucket(reason = '大包接力') {
+    if (llmRelayBucket.timer) {
+      clearTimeout(llmRelayBucket.timer);
+      llmRelayBucket.timer = null;
+    }
+    if (!llmRelayBucket.items.length) return;
+
+    const itemsToFlush = llmRelayBucket.items.splice(0);
+    const sliceIndices = [...new Set(itemsToFlush.map(it => it.sliceIndex))];
+    const cutIndices = sliceIndices.map(i => Math.max(0, i - 1));
+    const batchTag = `切片[${cutIndices.join(',')}]${reason} (${itemsToFlush.length}气泡)`;
+
+    console.log(`[ComicCapture] 🚀【大模型聚合发车】${batchTag}，包含切片 #${sliceIndices.join(', #')}，共 ${itemsToFlush.length} 处对白`);
+    void translateBatchItems(itemsToFlush, {
+      isFastTrack: false,
+      sliceTag: batchTag,
+      sliceIndex: sliceIndices[0]
+    });
+  }
+
+  async function translateBatchItems(items, options = {}) {
+    if (!items || !items.length) return;
+    const activeModel = globalThis.ComicLLMStore?.getActiveModel ? globalThis.ComicLLMStore.getActiveModel() : 'none';
+    if (!activeModel || activeModel === 'none') return;
 
     const providers = globalThis.ComicLLMStore?.getProviders ? globalThis.ComicLLMStore.getProviders() : [];
     const activeProviderId = globalThis.ComicLLMStore?.getActiveProviderId ? globalThis.ComicLLMStore.getActiveProviderId() : '';
     const provider = providers.find(p => p.id === activeProviderId) || providers[0];
 
-    const cutIdx = Math.max(0, slice.sliceIndex - 1);
-    const sliceTag = `切片${cutIdx} (#${slice.sliceIndex})`;
+    const sliceTag = options.sliceTag || `切片大包 (${items.length}气泡)`;
+    const sliceIndex = options.sliceIndex || items[0].sliceIndex;
 
     if (!provider || !provider.url || !provider.key) {
       if (globalThis.ComicErrorTracker) {
@@ -982,42 +1077,23 @@
       return;
     }
 
-    // 2. 筛选有文字的气泡，并对多行换行进行文本归一化拼接，编排行协议 ID [0] [1] ...
-    const currentLang = (globalThis.ComicLLMStore?.getOcrLang ? globalThis.ComicLLMStore.getOcrLang() : null) || 'kr';
-    const translatableBubbles = [];
-    bubbles.forEach((b) => {
-      const orig = (b.text || '').trim();
-      if (orig) {
-        // 关键修复：长漫气泡内文本常有物理换行，直接拼接 [0] 会导致仅首行带 ID、后续行被大模型直接丢弃或截断！
-        // 日语去换行无空格连接，英文/韩文/俄文用单空格连接为一个完整自然句
-        const isJa = (currentLang === 'ja') || /[\u3040-\u30ff]/.test(orig);
-        const normalized = isJa
-          ? orig.replace(/\r?\n+/g, '').replace(/\s+/g, ' ').trim()
-          : orig.replace(/\r?\n+/g, ' ').replace(/\s+/g, ' ').trim();
-
-        b.normalizedText = normalized;
-        b.llmId = translatableBubbles.length;
-        translatableBubbles.push(b);
-      }
-    });
-
-    if (translatableBubbles.length === 0) return;
-
     const llmPreparedAt = new Date().toISOString();
-    const linesInput = translatableBubbles.map(b => `[${b.llmId}] ${b.normalizedText}`).join('\n');
+    // 构造 [ID] 原文 的协议输入，例如 [S1_0] Text
+    const linesInput = items.map(it => `[${it.id}] ${it.normalizedText}`).join('\n');
 
     let endpoint = provider.url.trim().replace(/\/+$/, '');
     if (!endpoint.endsWith('/chat/completions')) {
       endpoint += '/chat/completions';
     }
 
-    // 3. 准备流式调用
     const ctrl = new AbortController();
-    llmActiveControllers.set(slice.sliceIndex, ctrl);
+    const ctrlKey = `${sliceIndex}-${Date.now()}`;
+    llmActiveControllers.set(ctrlKey, ctrl);
     const llmSentAt = new Date().toISOString();
     const llmStartTime = (typeof performance !== 'undefined') ? performance.now() : Date.now();
     let llmFirstTokenAt = null;
-    const systemPrompt = '你是一位专业的漫画汉化翻译家。请将以下漫画对白逐行翻译为简体中文。\n【输出规范】\n1. 每行格式必须严格为：[ID] 译文\n2. 严禁合并行、严禁遗漏行，[ID] 编号必须与输入完全一一对应\n3. 每条译文必须单行输出，严禁在译文内部换行\n4. 仅输出每行的 [ID] 译文，严禁输出任何问候、角色标签或额外解释\n5. 译文需自然口语化，拟声词贴切生动，契合漫画分镜语境';
+
+    const systemPrompt = '你是一位专业的漫画汉化翻译家。请将以下漫画对白逐行翻译为简体中文。\n【输出规范】\n1. 每行格式必须严格保留对应的 [ID] 标签，例如：[S1_0] 译文\n2. 严禁合并行、严禁遗漏行，[ID] 标签必须与输入完全一一对应\n3. 每条译文必须单行输出，严禁在译文内部换行\n4. 仅输出每行的 [ID] 译文，严禁输出任何问候、角色标签或额外解释\n5. 译文需自然口语化，拟声词贴切生动，契合漫画分镜语境';
 
     try {
       const requestPayload = {
@@ -1028,10 +1104,8 @@
         ],
         stream: true,
         temperature: 0.3,
-        max_tokens: Math.max(100, translatableBubbles.length * 40),
-        thinking: {
-          type: 'disabled'
-        }
+        max_tokens: Math.max(120, items.length * 45),
+        thinking: { type: 'disabled' }
       };
 
       const res = await fetch(endpoint, {
@@ -1055,14 +1129,7 @@
         let errType = '大模型请求异常';
         if (res.status === 401) errType = 'API Key 无效 (401)';
         else if (res.status === 402) errType = '账户欠费 / 额度耗尽 (402)';
-        else if (res.status === 429) {
-          if (/remaining balance|top up|balance|余额/i.test(errDetail)) {
-            errType = '💰 余额过低触发并发降级 (需充值)';
-            errDetail = 'DeepSeek 账户余额较低触发官方风控 (并发被压至 5)，充值后可立即恢复 500+ 高并发。原始提示: ' + errDetail;
-          } else {
-            errType = '频次超限 / 并发限制 (429)';
-          }
-        }
+        else if (res.status === 429) errType = '频次超限 / 并发限制 (429)';
         else if (res.status >= 500) errType = '大模型服务端故障 (5xx)';
 
         if (globalThis.ComicErrorTracker) {
@@ -1075,26 +1142,14 @@
         if (globalThis.ComicPacketInspector) {
           globalThis.ComicPacketInspector.record({
             sliceTag,
-            sliceIndex: slice.sliceIndex,
-            mode: (slice._api && slice._api.includes('127.0.0.1')) ? '本地 (Local 127.0.0.1:8000)' : '云端 (Cloud Serverless)',
-            apiEndpoint: slice._api || API,
-            ocr: {
-              sent_at: slice._ocrSentAt || '',
-              received_at: slice._ocrReceivedAt || '',
-              duration_ms: slice._ocrTimeMs || 0,
-              click_to_ocr_ms: slice._clickToOcrMs || 0,
-              bubbles_count: bubbles.length
-            },
+            sliceIndex,
+            mode: API.includes('127.0.0.1') ? '本地 (Local 127.0.0.1:8000)' : '云端 (Cloud Serverless)',
+            apiEndpoint: API,
+            ocr: { sent_at: '', received_at: '', duration_ms: 0, click_to_ocr_ms: 0, bubbles_count: items.length },
             llm: {
-              prepared_at: llmPreparedAt,
-              sent_at: llmSentAt,
-              first_token_at: '',
-              completed_at: new Date().toISOString(),
+              prepared_at: llmPreparedAt, sent_at: llmSentAt, first_token_at: '', completed_at: new Date().toISOString(),
               duration_ms: Math.round(((typeof performance !== 'undefined') ? performance.now() : Date.now()) - llmStartTime),
-              model: activeModel,
-              endpoint,
-              system_prompt: systemPrompt,
-              user_input: linesInput,
+              model: activeModel, endpoint, system_prompt: systemPrompt, user_input: linesInput,
               raw_response: `[请求失败 HTTP ${res.status}] ${errDetail}`
             }
           });
@@ -1107,42 +1162,40 @@
       let buffer = '';
       let accumulated = '';
       let fullRawResponse = '';
-      let currentBubbleId = -1;
-
+      let currentItem = null;
       let parsedLinesCount = 0;
-      let detectedIndexOffset = 0;
 
       const handleParsedLine = (rawLine) => {
         const line = rawLine.trim();
         if (!line) return;
-        const match = line.match(/^(?:\[(\d+)\]|(\d+)[\.、：:])\s*(.+)$/);
+
+        // 兼容 [S1_0]、[0]、1. 等各种标号格式
+        const match = line.match(/^(?:\[(S\d+_\d+|\d+)\]|(S\d+_\d+|\d+)[\.、：:])\s*(.+)$/i);
         if (match) {
-          const id = parseInt(match[1] || match[2], 10);
+          const tag = (match[1] || match[2]).toUpperCase();
           const rawTrans = match[3];
           const cleanTrans = cleanTranslatedText(rawTrans);
 
-          // 关键修复：1-based 索引与跳行自动对齐纠偏 (Index Alignment Correction)
-          // 很多大模型 (如 DeepSeek) 自然使用 1 开始编号 [1], [2]...
-          // 若首行解析到 [1]，且气泡数与序号吻合，或出现 id === translatableBubbles.length，说明大模型整体偏移 +1
-          if (parsedLinesCount === 0 && id === 1 && !translatableBubbles[id] && translatableBubbles[0]) {
-            detectedIndexOffset = -1;
-          } else if (id === translatableBubbles.length && translatableBubbles[id - 1]) {
-            detectedIndexOffset = -1;
+          // 1. 优先按全局联合 ID (如 S1_0) 精准匹配
+          let targetItem = items.find(it => it.id.toUpperCase() === tag);
+
+          // 2. 若大模型退化为纯数字标号 (如 [0], [1])，按序号匹配
+          if (!targetItem && /^\d+$/.test(tag)) {
+            const num = parseInt(tag, 10);
+            if (num < items.length) targetItem = items[num];
           }
 
-          let mappedId = id + detectedIndexOffset;
-          // 若按偏移仍未匹配到目标气泡，但按解析顺序行号有对应气泡，作为保底 fallback
-          if (!translatableBubbles[mappedId] && translatableBubbles[parsedLinesCount]) {
-            mappedId = parsedLinesCount;
+          // 3. 兜底按行解析顺序匹配
+          if (!targetItem && parsedLinesCount < items.length) {
+            targetItem = items[parsedLinesCount];
           }
 
-          currentBubbleId = mappedId;
+          currentItem = targetItem;
           parsedLinesCount++;
 
-          if (cleanTrans && translatableBubbles[mappedId]) {
-            const targetBubble = translatableBubbles[mappedId];
-            targetBubble.translatedText = cleanTrans;
-            updatePatchText(slice.sliceIndex, targetBubble, cleanTrans);
+          if (cleanTrans && targetItem) {
+            targetItem.bubble.translatedText = cleanTrans;
+            updatePatchText(targetItem.sliceIndex, targetItem.bubble, cleanTrans);
             if (!firstTranslationEmitted) {
               firstTranslationEmitted = true;
               if (globalThis.ComicFloatingBallOnFirstTranslation) {
@@ -1150,13 +1203,12 @@
               }
             }
           }
-        } else if (currentBubbleId >= 0 && translatableBubbles[currentBubbleId]) {
-          // LLM 内部换行续接处理，防止换行导致译文被截断
+        } else if (currentItem && currentItem.bubble) {
+          // LLM 内部换行续接处理
           const cleanCont = cleanTranslatedText(line);
           if (cleanCont) {
-            const targetBubble = translatableBubbles[currentBubbleId];
-            targetBubble.translatedText = (targetBubble.translatedText ? (targetBubble.translatedText + ' ') : '') + cleanCont;
-            updatePatchText(slice.sliceIndex, targetBubble, targetBubble.translatedText);
+            currentItem.bubble.translatedText = (currentItem.bubble.translatedText ? (currentItem.bubble.translatedText + ' ') : '') + cleanCont;
+            updatePatchText(currentItem.sliceIndex, currentItem.bubble, currentItem.bubble.translatedText);
             if (!firstTranslationEmitted) {
               firstTranslationEmitted = true;
               if (globalThis.ComicFloatingBallOnFirstTranslation) {
@@ -1185,7 +1237,7 @@
             if (content) {
               if (!llmFirstTokenAt) {
                 llmFirstTokenAt = new Date().toISOString();
-                if (slice.sliceIndex === 1 && !pipelineTelemetry.firstLlmTtfbMs) {
+                if (options.isFastTrack && !pipelineTelemetry.firstLlmTtfbMs) {
                   pipelineTelemetry.firstLlmTtfbMs = Math.round(((typeof performance !== 'undefined') ? performance.now() : Date.now()) - llmStartTime);
                   console.log(`[ComicCapture] ⚡【首字TTFB】首切片大模型首字返回延迟: ${pipelineTelemetry.firstLlmTtfbMs}ms`);
                   notify();
@@ -1210,23 +1262,24 @@
 
       const llmCompletedAt = new Date().toISOString();
       const llmDuration = Math.round(((typeof performance !== 'undefined') ? performance.now() : Date.now()) - llmStartTime);
-      if (slice.sliceIndex === 1 && !pipelineTelemetry.firstLlmTotalMs) {
+      if (options.isFastTrack && !pipelineTelemetry.firstLlmTotalMs) {
         pipelineTelemetry.firstLlmTotalMs = llmDuration;
         console.log(`[ComicCapture] ⚡【首片LLM总耗时】首切片大模型流完成耗时: ${pipelineTelemetry.firstLlmTotalMs}ms`);
         notify();
       }
+
       if (globalThis.ComicPacketInspector) {
         globalThis.ComicPacketInspector.record({
           sliceTag,
-          sliceIndex: slice.sliceIndex,
-          mode: (slice._api && slice._api.includes('127.0.0.1')) ? '本地 (Local 127.0.0.1:8000)' : '云端 (Cloud Serverless)',
-          apiEndpoint: slice._api || API,
+          sliceIndex,
+          mode: API.includes('127.0.0.1') ? '本地 (Local 127.0.0.1:8000)' : '云端 (Cloud Serverless)',
+          apiEndpoint: API,
           ocr: {
-            sent_at: slice._ocrSentAt || '',
-            received_at: slice._ocrReceivedAt || '',
-            duration_ms: slice._ocrTimeMs || 0,
-            click_to_ocr_ms: slice._clickToOcrMs || 0,
-            bubbles_count: bubbles.length
+            sent_at: '',
+            received_at: '',
+            duration_ms: 0,
+            click_to_ocr_ms: 0,
+            bubbles_count: items.length
           },
           llm: {
             prepared_at: llmPreparedAt,
@@ -1255,37 +1308,15 @@
             detail: msg
           });
         }
-        if (globalThis.ComicPacketInspector) {
-          globalThis.ComicPacketInspector.record({
-            sliceTag,
-            sliceIndex: slice.sliceIndex,
-            mode: (slice._api && slice._api.includes('127.0.0.1')) ? '本地 (Local 127.0.0.1:8000)' : '云端 (Cloud Serverless)',
-            apiEndpoint: slice._api || API,
-            ocr: {
-              sent_at: slice._ocrSentAt || '',
-              received_at: slice._ocrReceivedAt || '',
-              duration_ms: slice._ocrTimeMs || 0,
-              click_to_ocr_ms: slice._clickToOcrMs || 0,
-              bubbles_count: bubbles.length
-            },
-            llm: {
-              prepared_at: llmPreparedAt,
-              sent_at: llmSentAt,
-              first_token_at: llmFirstTokenAt || '',
-              completed_at: new Date().toISOString(),
-              duration_ms: Math.round(((typeof performance !== 'undefined') ? performance.now() : Date.now()) - llmStartTime),
-              model: activeModel,
-              endpoint,
-              system_prompt: systemPrompt,
-              user_input: linesInput,
-              raw_response: `[异常中止] ${err?.message || String(err)}`
-            }
-          });
-        }
       }
     } finally {
-      llmActiveControllers.delete(slice.sliceIndex);
+      llmActiveControllers.delete(ctrlKey);
     }
+  }
+
+  // 保持向后兼容性
+  function translateSliceBubbles(slice, bubbles, batchMeta) {
+    dispatchBubblesToLLM(slice, bubbles, batchMeta);
   }
 
   function renderPatches(container) {
@@ -2114,15 +2145,16 @@
           console.log(`[ComicCapture] 📊【前6切片OCR全就绪】从点击到前6片OCR就绪: ${pipelineTelemetry.slices1To5AllOcrReadyMs}ms, 累计气泡: ${pipelineTelemetry.first6SlicesBubbles}个`);
         }
 
-        // 🌟 触发前端大模型直连流式翻译 (若选择 none 学习模式则自动跳过直连)
+        // 🌟 触发前端大模型双轨调度流式翻译 (首片特快 + 12~15 气泡大包接力)
         if (bubbles.length > 0) {
-          translateSliceBubbles(slice, bubbles);
+          dispatchBubblesToLLM(slice, bubbles, batchMeta);
         }
       },
       onBatch: (batchInfo) => {
         batchesCompleted = batchInfo.batchIndex;
         pendingBatchCount = captureSession?.getPendingBatchCount ? captureSession.getPendingBatchCount() : 0;
         if (batchInfo.isFinalBatch) {
+          flushLlmBucket('最终收尾大包');
           statusText = `切片识别全流程完成：共 ${slicesCompleted} 片`;
           console.log(`[ComicCapture] 切片流水线全流程完成: 共 ${slicesCompleted} 片`);
         }
@@ -2148,6 +2180,7 @@
   function stop() {
     if (!running && !starting) return;
     firstTranslationEmitted = false;
+    resetLlmBucket();
     if (typeof window !== 'undefined') {
       window.removeEventListener('scroll', onScrollActivity);
       window.removeEventListener('scrollend', onScrollActivity);
@@ -2258,9 +2291,10 @@
         for (const [sliceIndex, bubbles] of patchesBySlice) {
           const slice = completedSlices.find(s => s.sliceIndex === sliceIndex);
           if (slice && bubbles.some(b => !b.translatedText)) {
-            translateSliceBubbles(slice, bubbles);
+            dispatchBubblesToLLM(slice, bubbles);
           }
         }
+        flushLlmBucket('手动切模型补充大包');
       }
     });
   }
