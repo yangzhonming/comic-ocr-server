@@ -86,10 +86,70 @@
     form.append("batch_index", String(batchIndex));
     form.append("is_final_batch", String(Boolean(isFinalBatch)));
     form.append("lang", selectedLang);
+    const detThresh = (typeof localStorage !== 'undefined' ? localStorage.getItem('comic_ocr_det_thresh') : null) || '0.30';
+    const detBoxThresh = (typeof localStorage !== 'undefined' ? localStorage.getItem('comic_ocr_det_box_thresh') : null) || '0.50';
+    const recScore = (typeof localStorage !== 'undefined' ? localStorage.getItem('comic_ocr_rec_score') : null) || '0.60';
+    form.append("det_thresh", detThresh);
+    form.append("det_box_thresh", detBoxThresh);
+    form.append("rec_score", recScore);
     const ocrSentAt = new Date().toISOString();
     const ocrStartTime = (typeof performance !== 'undefined') ? performance.now() : Date.now();
-    const response = await fetch(api + "/slice", {method: "POST", body: form, signal});
-    const result = await response.json().catch(() => ({}));
+    let result = null;
+
+    if (globalThis.ComicNetBridge?.postSlice) {
+      try {
+        result = await globalThis.ComicNetBridge.postSlice(api, {
+          sliceBlob: slice.blob,
+          sliceName,
+          cutIndex,
+          chapterId,
+          coordinateId: slice.coordinateId,
+          sliceIndex: slice.sliceIndex,
+          startY: slice.startY,
+          endY: slice.endY,
+          width: slice.width,
+          height: slice.height,
+          sourcePages: slice.sourcePages,
+          cutMethod: slice.cutMethod,
+          batchIndex,
+          isFinalBatch,
+          lang: selectedLang,
+          detThresh,
+          detBoxThresh,
+          recScore,
+          signal
+        });
+      } catch (err) {
+        const errMsg = err.detail || err.message || "Slice upload failed";
+        if (typeof globalThis !== 'undefined' && globalThis.ComicErrorTracker && signal?.aborted !== true) {
+          globalThis.ComicErrorTracker.record({
+            type: '切片接口异常',
+            sliceTag: `${sliceName} (第${slice.sliceIndex}片)`,
+            detail: errMsg
+          });
+        }
+        throw err;
+      }
+    } else {
+      const response = await fetch(api + "/slice", {method: "POST", body: form, signal});
+      result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const errMsg = result.detail || "Slice upload failed: HTTP " + response.status;
+        if (typeof globalThis !== 'undefined' && globalThis.ComicErrorTracker && signal?.aborted !== true) {
+          let errType = '切片接口异常';
+          if (response.status === 413) errType = '切片图片体积超限 (413)';
+          else if (response.status === 409) errType = '切片坐标冲突 (409)';
+          else if (response.status >= 500) errType = 'OCR 服务端错误 (5xx)';
+          globalThis.ComicErrorTracker.record({
+            type: errType,
+            sliceTag: `${sliceName} (第${slice.sliceIndex}片)`,
+            detail: errMsg
+          });
+        }
+        throw new Error(errMsg);
+      }
+    }
+
     const ocrReceivedAt = new Date().toISOString();
     const ocrDuration = Math.round(((typeof performance !== 'undefined') ? performance.now() : Date.now()) - ocrStartTime);
     if (result && typeof result === 'object') {
@@ -98,37 +158,27 @@
       result._ocrReceivedAt = ocrReceivedAt;
       result._api = api;
     }
-    if (!response.ok) {
-      const errMsg = result.detail || "Slice upload failed: HTTP " + response.status;
-      if (typeof globalThis !== 'undefined' && globalThis.ComicErrorTracker && signal?.aborted !== true) {
-        let errType = '切片接口异常';
-        if (response.status === 413) errType = '切片图片体积超限 (413)';
-        else if (response.status === 409) errType = '切片坐标冲突 (409)';
-        else if (response.status >= 500) errType = 'OCR 服务端错误 (5xx)';
-        globalThis.ComicErrorTracker.record({
-          type: errType,
-          sliceTag: `${sliceName} (第${slice.sliceIndex}片)`,
-          detail: errMsg
-        });
-      }
-      throw new Error(errMsg);
-    }
     return result;
   }
 
   async function uploadCoordinates(index, {api, chapterId, signal, lang}) {
     try {
       const selectedLang = lang || (globalThis.ComicDebugHUD?.getOcrLang ? globalThis.ComicDebugHUD.getOcrLang() : (typeof localStorage !== 'undefined' ? localStorage.getItem('comic_ocr_lang') : null)) || 'kr';
-      const response = await fetch(api + "/coordinates", {
-        method: "POST", signal,
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({chapter_id: chapterId, ...index, lang: selectedLang})
-      });
-      if (!response.ok && response.status !== 404) {
-        console.warn("[ComicCaptureFlow] 坐标索引上传状态码:", response.status);
+      const payload = {chapter_id: chapterId, ...index, lang: selectedLang};
+      if (globalThis.ComicNetBridge?.postCoordinates) {
+        await globalThis.ComicNetBridge.postCoordinates(api, payload, signal);
+      } else {
+        const response = await fetch(api + "/coordinates", {
+          method: "POST", signal,
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(payload)
+        });
+        if (!response.ok && response.status !== 404) {
+          console.warn("[ComicCaptureFlow] 坐标索引上传状态码:", response.status);
+        }
       }
     } catch (err) {
-      console.warn("[ComicCaptureFlow] 云端无状态模式，跳过本地坐标归档:", err?.message);
+      console.warn("[ComicCaptureFlow] 坐标归档跳过:", err?.message);
     }
   }
 
@@ -143,6 +193,12 @@
     form.append("width", String(width));
     form.append("height", String(height));
     form.append("lang", selectedLang);
+    const detThresh = (typeof localStorage !== 'undefined' ? localStorage.getItem('comic_ocr_det_thresh') : null) || '0.30';
+    const detBoxThresh = (typeof localStorage !== 'undefined' ? localStorage.getItem('comic_ocr_det_box_thresh') : null) || '0.50';
+    const recScore = (typeof localStorage !== 'undefined' ? localStorage.getItem('comic_ocr_rec_score') : null) || '0.60';
+    form.append("det_thresh", detThresh);
+    form.append("det_box_thresh", detBoxThresh);
+    form.append("rec_score", recScore);
     const response = await fetch(api + "/capture", {method: "POST", body: form, signal});
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.detail || "Capture upload failed: HTTP " + response.status);

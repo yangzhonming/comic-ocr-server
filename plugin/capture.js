@@ -1,24 +1,24 @@
 (() => {
   // 漫画页序预览与切片协调器。图像/坐标/切线计算由 slicing/ 模块负责。
   const CLOUD_API = '';
-  const DEFAULT_LOCAL_API = 'http://127.0.0.1:8000';
+  const DEFAULT_LOCAL_API = 'http://127.0.0.1:8080';
   let API = '';
 
   function getEffectiveApi() {
     try {
-      const isLocal = typeof localStorage !== 'undefined' && (
-        localStorage.getItem('comic_dev_enable_capture') === '1' ||
-        localStorage.getItem('comic_dev_use_local_backend') === '1'
-      );
+      const isLocal = globalThis.ComicConfigStore?.getUseLocalBackend ?
+                      globalThis.ComicConfigStore.getUseLocalBackend() :
+                      (typeof localStorage !== 'undefined' ? localStorage.getItem('comic_dev_enable_capture') !== '0' : true);
       if (isLocal) {
-        return 'http://127.0.0.1:8000';
+        return 'http://127.0.0.1:8080';
       }
-      const customCloud = typeof localStorage !== 'undefined' && localStorage.getItem('comic_cloud_api_url');
-      if (customCloud && customCloud.trim()) {
-        return customCloud.trim().replace(/\/+$/, '');
+      const customUrl = (globalThis.ComicConfigStore?.getCloudApiUrl ? globalThis.ComicConfigStore.getCloudApiUrl() : null) ||
+                        (typeof localStorage !== 'undefined' ? localStorage.getItem('comic_cloud_api_url') : null);
+      if (customUrl && customUrl.trim()) {
+        return customUrl.trim().replace(/\/+$/, '');
       }
     } catch {}
-    return CLOUD_API || 'http://127.0.0.1:8000';
+    return 'http://127.0.0.1:8080';
   }
 
   const MIN_WIDTH_RATIO = 0.68;
@@ -30,11 +30,11 @@
   let overlayHost = null;
   let overlayRoot = null;
   let readerResizeObserver = null;
-  const badgesByImage = new Map();
   const patchesBySlice = new Map();
   const patchElements = new Map();
   const hiddenPatches = new Set();
-  let previewEnabled = true;
+  let previewEnabled = false;
+  let currentMinFontSize = (typeof localStorage !== 'undefined' ? parseInt(localStorage.getItem('comic_min_font_size'), 10) : 0) || 13;
   let running = false;
   let stopping = false;
   let starting = false;
@@ -86,8 +86,12 @@
     if (lastHealthCheckApi === apiUrl && (Date.now() - lastHealthCheckTime) < 120000) {
       return true;
     }
-    const res = await fetch(`${apiUrl}/health`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (globalThis.ComicNetBridge?.fetchHealth) {
+      await globalThis.ComicNetBridge.fetchHealth(apiUrl);
+    } else {
+      const res = await fetch(`${apiUrl}/health`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    }
     lastHealthCheckTime = Date.now();
     lastHealthCheckApi = apiUrl;
     return true;
@@ -489,14 +493,6 @@
       overlayRoot = overlayHost.attachShadow({ mode: 'closed' });
       overlayRoot.innerHTML = `<style>
         :host { all: initial; }
-        .badge { position: absolute; min-width: 28px; height: 28px; padding: 0 6px; box-sizing: border-box;
-          display:flex; align-items:center; justify-content:center; border:2px solid white; border-radius:999px;
-          background:#e5365d; color:white; font:700 14px/1 system-ui,sans-serif;
-          text-shadow:0 1px 2px #000; box-shadow:0 2px 8px #0008; z-index: 1001; }
-        .badge[data-state="done"] { background:#168c58; }
-        .badge[data-state="uploading"] { background:#e18b13; }
-        .badge[data-state="failed"] { background:#bd183b; }
-        .badge[data-state="pending"] { background:#52677a; }
         .coordinate-line { position: absolute; height: 0; border-top: 1px dashed #28a7e8;
           box-sizing: border-box; filter: drop-shadow(0 1px 1px #0009); z-index: 999; }
         .coordinate-line.slice { border-top: 3px solid #35d07f; }
@@ -521,11 +517,12 @@
           forced-color-adjust: none !important;
           isolation: isolate !important;
           filter: none !important;
+          overflow: visible !important; /* 允许文字在紧凑小气泡下适度溢出呈现，底色补丁维持原状 */
           transition: opacity 0.15s ease, transform 0.1s ease;
         }
         .manga-patch:hover {
           outline: 1.5px solid rgba(40, 167, 232, 0.7);
-          border-radius: 12px;
+          border-radius: 6px;
         }
         .manga-patch.hidden-mask .manga-patch-bg {
           opacity: 0 !important;
@@ -617,7 +614,7 @@
         }
         .manga-patch.glow-patch .manga-patch-bg {
           display: block !important;
-          border-radius: 12px !important;
+          border-radius: 6px !important;
           backdrop-filter: blur(3px) !important;
         }
         .manga-patch.glow-patch .manga-patch-text {
@@ -636,8 +633,8 @@
         }
         .manga-patch-bg {
           position: absolute;
-          inset: -2px -3px; /* 边缘微扩 2~3px，严密遮盖底图原文防止漏边 */
-          border-radius: 12px;
+          inset: 0; /* 紧致贴合，严禁外突溢出气泡描边 */
+          border-radius: 6px; /* 紧凑小圆角，确保四角充分遮盖原文且不外突破坏气泡轮廓 */
           pointer-events: none;
           z-index: 1;
           color-scheme: light only !important;
@@ -649,26 +646,33 @@
           position: relative;
           z-index: 2;
           display: flex;
+          flex-direction: column;
           align-items: center;
           justify-content: center;
           text-align: center;
-          line-height: 1.25;
-          word-break: keep-all;
+          line-height: 1.2;
+          word-break: break-word;
           overflow-wrap: break-word;
+          overflow-wrap: anywhere;
           text-wrap: balance;
-          white-space: pre-wrap;
+          white-space: pre-line; /* 保留显式换行符同时允许自然折行 */
           font-family: -apple-system, BlinkMacSystemFont, "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
-          padding: 2px 4px;
+          padding: 1px 2px;
           box-sizing: border-box;
           width: 100%;
           height: 100%;
+          min-width: 0 !important;
+          min-height: 0 !important;
+          max-width: 100% !important;
+          max-height: 100% !important;
+          overflow: visible !important; /* 允许文字在紧凑小气泡下适度溢出呈现，底色补丁维持原状 */
           color-scheme: light only !important;
           forced-color-adjust: none !important;
           -webkit-text-fill-color: initial !important;
           isolation: isolate !important;
           filter: none !important;
         }
-      </style><div id="coordinates"></div><div id="badges"></div><div id="patches"></div>`;
+      </style><div id="coordinates"></div><div id="patches"></div>`;
       window.addEventListener('resize', scheduleOverlay, { passive: true });
     }
 
@@ -681,9 +685,23 @@
     if (!frame) frame = requestAnimationFrame(renderOverlay);
   }
 
+  function triggerSliceBlobDownload(blob, filename) {
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 100);
+  }
+
   function renderOverlay() {
     frame = 0;
-    if (!previewEnabled || !reader?.root?.isConnected || !entries.length) {
+    if (!reader?.root?.isConnected || !entries.length) {
       if (overlayHost) overlayHost.style.display = 'none';
       return;
     }
@@ -691,40 +709,19 @@
     if (!overlayHost || !overlayRoot) return;
     overlayHost.style.display = 'block';
 
-    const badges = overlayRoot.querySelector('#badges');
     const coordinates = overlayRoot.querySelector('#coordinates');
     const patches = overlayRoot.querySelector('#patches');
-    if (!badges || !coordinates || !patches) return;
+    if (!coordinates || !patches) return;
+
+    // 辅助线/切线使用独立图层与纯 CSS 属性控制，不可见时完全不接受指针事件，彻底隔绝干扰
+    coordinates.style.display = previewEnabled ? 'block' : 'none';
+    coordinates.style.pointerEvents = previewEnabled ? 'auto' : 'none';
+
     coordinates.replaceChildren();
-
-    const currentImages = new Set();
-    for (const entry of entries) {
-      if (!entry.img.isConnected) continue;
-      const offset = getImageOffsetInRoot(entry.img, reader.root);
-      if (!offset || offset.width < 2 || offset.height < 2) continue;
-      currentImages.add(entry.img);
-
-      let badge = badgesByImage.get(entry.img);
-      if (!badge) {
-        badge = document.createElement('div');
-        badge.className = 'badge';
-        badgesByImage.set(entry.img, badge);
-        badges.appendChild(badge);
-      }
-      badge.textContent = String(entry.pageIndex);
-      badge.dataset.state = states.get(entry.img) || 'pending';
-      badge.style.left = `${Math.max(0, offset.left + 6)}px`;
-      badge.style.top = `${Math.max(0, offset.top + 6)}px`;
+    if (previewEnabled) {
+      renderCoordinates(coordinates);
     }
 
-    for (const [img, badge] of badgesByImage) {
-      if (!img.isConnected || !currentImages.has(img)) {
-        badge.remove();
-        badgesByImage.delete(img);
-      }
-    }
-
-    renderCoordinates(coordinates);
     renderPatches(patches);
   }
 
@@ -746,7 +743,7 @@
     };
   }
 
-  function addCoordinateLine(container, y, label, type) {
+  function addCoordinateLine(container, y, label, type, slice = null) {
     const point = locateAbsoluteY(y);
     if (!point || point.width < 2) return 0;
     const line = document.createElement('div');
@@ -754,6 +751,35 @@
     line.style.left = `${point.left}px`;
     line.style.top = `${point.top}px`;
     line.style.width = `${point.width}px`;
+
+    // 切片线支持点击与长按触发下载切片图片功能
+    if (type === 'slice' && slice) {
+      line.style.pointerEvents = 'auto';
+      line.style.cursor = 'pointer';
+      line.title = `切片 ${slice.sliceIndex}：长按或双击可直接下载该切片图片`;
+
+      let pressTimer = null;
+      const downloadThisSlice = () => {
+        if (slice.blob) {
+          triggerSliceBlobDownload(slice.blob, `slice-${String(slice.sliceIndex).padStart(3, '0')}.jpg`);
+        }
+      };
+
+      line.addEventListener('pointerdown', (e) => {
+        pressTimer = setTimeout(() => {
+          downloadThisSlice();
+          pressTimer = null;
+        }, 500);
+      });
+      const clearTimer = () => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; } };
+      line.addEventListener('pointerup', clearTimer);
+      line.addEventListener('pointercancel', clearTimer);
+      line.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+        downloadThisSlice();
+      });
+    }
+
     const text = document.createElement('span');
     text.className = 'coordinate-label';
     text.textContent = label;
@@ -767,11 +793,11 @@
     let count = 0;
     for (const page of coordinateIndex.pages) {
       count += addCoordinateLine(container, page.startY,
-        `原图 ${page.pageIndex} · Y=${page.startY}px`, 'page');
+        `原图分界 · Y=${page.startY}px`, 'page');
     }
     for (const slice of completedSlices) {
       count += addCoordinateLine(container, slice.endY,
-        `切片 ${slice.sliceIndex} · Y=${slice.endY}px · H=${slice.height}px`, 'slice');
+        `落刀切线 ${slice.sliceIndex} · Y=${slice.endY}px (长按下载切片)`, 'slice', slice);
     }
     return count;
   }
@@ -881,6 +907,16 @@
       .trim();
   }
 
+  function isWatermarkText(text) {
+    if (!text || typeof text !== 'string') return false;
+    const blacklist = globalThis.ComicConfigStore?.getGlobalBlacklist ? globalThis.ComicConfigStore.getGlobalBlacklist() : [];
+    const lower = text.toLowerCase();
+    return blacklist.some(term => {
+      const t = (term || '').trim().toLowerCase();
+      return t && lower.includes(t);
+    });
+  }
+
   function getBubbleDisplayText(bubble) {
     if (!bubble) return '';
     const activeModel = globalThis.ComicLLMStore?.getActiveModel ? globalThis.ComicLLMStore.getActiveModel() : 'none';
@@ -900,23 +936,59 @@
     return bubble.text || '';
   }
 
-  function computeOptimalFontSize(text, baseSize, containerW) {
-    if (!text || containerW <= 0) return baseSize;
-    const lines = String(text).split('\n');
-    let maxLineChars = 0;
-    for (const l of lines) {
-      const clean = l.trim();
-      let visualUnits = 0;
-      for (let i = 0; i < clean.length; i++) {
-        visualUnits += clean.charCodeAt(i) > 255 ? 1.0 : 0.55;
-      }
-      if (visualUnits > maxLineChars) maxLineChars = visualUnits;
+  function computeOptimalFontSize(text, baseSize, containerW, containerH = 0) {
+    const floor = Math.max(10, Math.min(24, currentMinFontSize || 13));
+    if (!text || containerW <= 0) return Math.max(floor, baseSize);
+    const cleanStr = String(text).trim();
+    if (!cleanStr) return Math.max(floor, baseSize);
+
+    // 计算视觉字符单元 (全角汉字/日韩文算 1.0，半角西文/标点/数字算 0.55)
+    let visualUnits = 0;
+    for (const ch of cleanStr) {
+      if (ch === '\n' || ch === '\r') continue;
+      visualUnits += ch.charCodeAt(0) > 255 ? 1.0 : 0.55;
     }
-    if (maxLineChars <= 0) return baseSize;
-    const availW = Math.max(20, containerW - 10);
-    const maxCharSize = Math.floor(availW / maxLineChars);
-    // 最低保护 12px（严格保证手机端视觉清晰度），平滑阶梯缩放
-    return Math.max(12, Math.min(baseSize, maxCharSize));
+    if (visualUnits <= 0) return Math.max(floor, baseSize);
+
+    // 气泡可用内部安全边距 (左右各留 2px，上下各留 2px)
+    const availW = Math.max(12, containerW - 4);
+    const availH = containerH > 0 ? Math.max(10, containerH - 4) : 9999;
+
+    // 漫画基准字号限制在 floor ~ 32px 之间（绝对下限遵循用户自定义 floor）
+    const maxAllowed = Math.max(floor, Math.min(32, baseSize));
+
+    // 从 maxAllowed 向下探测，找到能够自然多行居中容纳在 (availW, availH) 内的最佳字号
+    for (let fs = maxAllowed; fs >= floor; fs--) {
+      const charsPerLine = Math.max(1, Math.floor(availW / fs));
+      const numLines = Math.ceil(visualUnits / charsPerLine);
+      const totalH = numLines * (fs * 1.2);
+      if (totalH <= availH) {
+        return fs;
+      }
+    }
+
+    // 严守 floor 最低下限保底，绝不缩至 floor 以下，允许文字适度溢出垂直边距
+    return floor;
+  }
+
+  function applyMinFontSizeToAllPatches(newFloor) {
+    currentMinFontSize = Math.max(10, Math.min(24, parseInt(newFloor, 10) || 13));
+    try {
+      localStorage.setItem('comic_min_font_size', String(currentMinFontSize));
+    } catch {}
+
+    // 遍历当前已渲染的所有气泡补丁，按新下限重算并立即刷新字号
+    patchElements.forEach((patch) => {
+      const textEl = patch.querySelector('.manga-patch-text');
+      if (!textEl) return;
+      const text = textEl.textContent || '';
+      if (!text) return;
+      const effW = parseFloat(patch.style.width) || 0;
+      const effH = parseFloat(patch.style.height) || 0;
+      const baseSize = patch._baseFontSize || parseFloat(textEl.style.fontSize) || 16;
+      const optSize = computeOptimalFontSize(text, Math.max(currentMinFontSize, baseSize), effW, effH);
+      textEl.style.fontSize = `${optSize}px`;
+    });
   }
 
   function updatePatchText(sliceIndex, bubble, newText) {
@@ -932,8 +1004,9 @@
           textEl.textContent = newText;
         }
         const effW = parseFloat(patch.style.width) || 0;
+        const effH = parseFloat(patch.style.height) || 0;
         const baseSize = patch._baseFontSize || parseFloat(textEl.style.fontSize) || 16;
-        const optSize = computeOptimalFontSize(newText, baseSize, effW);
+        const optSize = computeOptimalFontSize(newText, Math.max(currentMinFontSize, baseSize), effW, effH);
         textEl.style.fontSize = `${optSize}px`;
       }
       const isGhost = Boolean(bubble.is_ghost || bubble.role === 'sfx_ghost');
@@ -985,6 +1058,10 @@
     bubbles.forEach((b, bIdx) => {
       const orig = (b.text || '').trim();
       if (orig) {
+        if (b.isWatermark || isWatermarkText(orig)) {
+          b.isWatermark = true;
+          return;
+        }
         const isJa = (currentLang === 'ja') || /[\u3040-\u30ff]/.test(orig);
         const normalized = isJa
           ? orig.replace(/\r?\n+/g, '').replace(/\s+/g, ' ').trim()
@@ -1093,7 +1170,24 @@
     const llmStartTime = (typeof performance !== 'undefined') ? performance.now() : Date.now();
     let llmFirstTokenAt = null;
 
-    const systemPrompt = '你是一位专业的漫画汉化翻译家。请将以下漫画对白逐行翻译为简体中文。\n【输出规范】\n1. 每行格式必须严格保留对应的 [ID] 标签，例如：[S1_0] 译文\n2. 严禁合并行、严禁遗漏行，[ID] 标签必须与输入完全一一对应\n3. 每条译文必须单行输出，严禁在译文内部换行\n4. 仅输出每行的 [ID] 译文，严禁输出任何问候、角色标签或额外解释\n5. 译文需自然口语化，拟声词贴切生动，契合漫画分镜语境';
+    let systemPrompt = '你是一位专业的漫画汉化翻译家。请将以下漫画对白逐行翻译为简体中文。\n【输出规范】\n1. 每行格式必须严格保留对应的 [ID] 标签，例如：[S1_0] 译文\n2. 严禁合并行、严禁遗漏行，[ID] 标签必须与输入完全一一对应\n3. 每条译文必须单行输出，严禁在译文内部换行\n4. 仅输出每行的 [ID] 译文，严禁输出任何问候、角色标签或额外解释\n5. 译文需自然口语化，拟声词贴切生动，契合漫画分镜语境';
+
+    // 动态注入当前漫画档案的世界观与专有名词白名单
+    if (globalThis.ComicConfigStore?.getCurrentProfile) {
+      try {
+        const curProfile = ComicConfigStore.getCurrentProfile(globalThis.location?.href);
+        if (curProfile) {
+          if (curProfile.worldview && curProfile.worldview.trim()) {
+            systemPrompt += `\n\n【作品世界观与风格语气】\n${curProfile.worldview.trim()}`;
+          }
+          if (Array.isArray(curProfile.referenceTerms) && curProfile.referenceTerms.length > 0) {
+            systemPrompt += `\n\n【专有名词译名规范】\n请务必参考并优先采用以下标准中文译名：\n- ${curProfile.referenceTerms.join('\n- ')}`;
+          }
+        }
+      } catch (err) {
+        console.warn('[ComicCapture] 提取漫画语料库档案异常:', err);
+      }
+    }
 
     try {
       const requestPayload = {
@@ -1143,9 +1237,17 @@
           globalThis.ComicPacketInspector.record({
             sliceTag,
             sliceIndex,
-            mode: API.includes('127.0.0.1') ? '本地 (Local 127.0.0.1:8000)' : '云端 (Cloud Serverless)',
+            mode: API.includes('127.0.0.1') ? '手机加速 (Mobile 127.0.0.1:8080)' : '云端 (Cloud Serverless)',
             apiEndpoint: API,
-            ocr: { sent_at: '', received_at: '', duration_ms: 0, click_to_ocr_ms: 0, bubbles_count: items.length },
+            slice: items[0]?.slice,
+            bubbles: items.map(it => it.bubble),
+            ocr: {
+              sent_at: items[0]?.slice?._ocrSentAt || '',
+              received_at: items[0]?.slice?._ocrReceivedAt || '',
+              duration_ms: items[0]?.slice?._ocrTimeMs || 0,
+              click_to_ocr_ms: items[0]?.slice?._clickToOcrMs || 0,
+              bubbles_count: items.length
+            },
             llm: {
               prepared_at: llmPreparedAt, sent_at: llmSentAt, first_token_at: '', completed_at: new Date().toISOString(),
               duration_ms: Math.round(((typeof performance !== 'undefined') ? performance.now() : Date.now()) - llmStartTime),
@@ -1272,13 +1374,15 @@
         globalThis.ComicPacketInspector.record({
           sliceTag,
           sliceIndex,
-          mode: API.includes('127.0.0.1') ? '本地 (Local 127.0.0.1:8000)' : '云端 (Cloud Serverless)',
+          mode: API.includes('127.0.0.1') ? '手机加速 (Mobile 127.0.0.1:8080)' : '云端 (Cloud Serverless)',
           apiEndpoint: API,
+          slice: items[0]?.slice,
+          bubbles: items.map(it => it.bubble),
           ocr: {
-            sent_at: '',
-            received_at: '',
-            duration_ms: 0,
-            click_to_ocr_ms: 0,
+            sent_at: items[0]?.slice?._ocrSentAt || '',
+            received_at: items[0]?.slice?._ocrReceivedAt || '',
+            duration_ms: items[0]?.slice?._ocrTimeMs || 0,
+            click_to_ocr_ms: items[0]?.slice?._clickToOcrMs || 0,
             bubbles_count: items.length
           },
           llm: {
@@ -1387,7 +1491,7 @@
           const xOverlapRatio = Math.min(bW, eW) > 0 ? (xInter / Math.min(bW, eW)) : 0;
           const verticalGap = Math.max(0, Math.max(bY0, eY0) - Math.min(bY0 + bH, eY0 + eH));
 
-          if (xOverlapRatio >= 0.60 && verticalGap <= 15 && Math.abs(cand.sliceIndex - existing.sliceIndex) <= 1) {
+          if (xOverlapRatio >= 0.60 && verticalGap <= 6 && cand.sliceIndex !== existing.sliceIndex && Math.abs(cand.sliceIndex - existing.sliceIndex) === 1) {
             isDuplicate = true;
             const mergedY0 = Math.min(bY0, eY0);
             const mergedY1 = Math.max(bY0 + bH, eY0 + eH);
@@ -1409,6 +1513,9 @@
 
     for (const cand of uniqueCandidates) {
       const { sliceIndex, bIdx, bubble } = cand;
+      if (bubble.isWatermark || isWatermarkText(bubble.text)) {
+        continue;
+      }
       const rawX0 = bubble.box_abs[0];
         const rawY0 = bubble.box_abs[1];
         const rawX1 = bubble.box_abs[0] + bubble.box_abs[2];
@@ -1426,12 +1533,12 @@
         const p1 = locateAbsoluteY(y1);
 
         const scaleX = p0.scaleX || (p0.width / coordinateIndex.width);
+        const scaleY = p0.scaleY || scaleX;
         const patchLeft = p0.left + x0 * scaleX;
         const patchTop = p0.top;
         const patchW = (x1 - x0) * scaleX;
-        const patchH = (p1 && p1.top > p0.top)
-          ? (p1.top - p0.top)
-          : ((y1 - y0) * (p0.scaleY || scaleX));
+        // 彻底杜绝使用跨 DOM 元素间隙污染后的 p1.top - p0.top 导致补丁纵向被恶性拉长
+        const patchH = (y1 - y0) * scaleY;
 
         if (patchW < 2 || patchH < 2) continue;
 
@@ -1447,13 +1554,11 @@
         let effHeight = patchH;
 
         if (isDialogue) {
-          // 气泡内留白智能呼吸外扩 (横向左右各微扩 12%~16%，利用原图气泡原本充裕的白底空间，杜绝短句尴尬折行)
-          const padX = Math.min(20, Math.max(5, Math.round(patchW * 0.14)));
-          const padY = Math.min(8, Math.max(2, Math.round(patchH * 0.06)));
-          effLeft = Math.max(0, patchLeft - padX);
-          effWidth = patchW + padX * 2;
-          effTop = Math.max(0, patchTop - padY);
-          effHeight = patchH + padY * 2;
+          // 气泡紧致贴合 (严禁扩大补丁导致气泡框残缺，严格按检测边界 0 外扩)
+          effLeft = patchLeft;
+          effWidth = patchW;
+          effTop = patchTop;
+          effHeight = patchH;
         }
 
         const key = `${sliceIndex}-${bIdx}`;
@@ -1538,14 +1643,73 @@
           patch.appendChild(bgLayer);
           patch.appendChild(textEl);
 
+          let lastTapTime = 0;
+          let singleClickTimer = null;
+
+          const triggerBubbleModal = (e) => {
+            e.stopPropagation();
+            if (e.preventDefault) e.preventDefault();
+            if (singleClickTimer) {
+              clearTimeout(singleClickTimer);
+              singleClickTimer = null;
+            }
+            hiddenPatches.delete(key);
+            scheduleOverlay();
+
+            if (globalThis.ComicBubbleModal?.open) {
+              globalThis.ComicBubbleModal.open({
+                sliceIndex,
+                bIdx,
+                bubble,
+                rawText: bubble.text || '',
+                transText: bubble.translatedText || '',
+                onUpdate: (newTrans, oldTerm, newTerm) => {
+                  bubble.translatedText = newTrans;
+                  updatePatchText(sliceIndex, bubble, newTrans);
+
+                  // 全局联动热替换
+                  if (oldTerm && newTerm) {
+                    patchesBySlice.forEach((bList, sIdx) => {
+                      bList.forEach(b => {
+                        if (b !== bubble && b.translatedText && b.translatedText.includes(oldTerm)) {
+                          b.translatedText = b.translatedText.split(oldTerm).join(newTerm);
+                          updatePatchText(sIdx, b, b.translatedText);
+                        }
+                      });
+                    });
+                  }
+                },
+                onBlacklist: (raw) => {
+                  bubble.isWatermark = true;
+                  hiddenPatches.add(key);
+                  scheduleOverlay();
+                }
+              });
+            }
+          };
+
+          patch.addEventListener('dblclick', triggerBubbleModal);
+
           patch.addEventListener('click', (e) => {
             e.stopPropagation();
-            if (hiddenPatches.has(key)) {
-              hiddenPatches.delete(key);
-            } else {
-              hiddenPatches.add(key);
+            const now = Date.now();
+            if (now - lastTapTime < 380) {
+              lastTapTime = 0;
+              triggerBubbleModal(e);
+              return;
             }
-            scheduleOverlay();
+            lastTapTime = now;
+
+            if (singleClickTimer) clearTimeout(singleClickTimer);
+            singleClickTimer = setTimeout(() => {
+              singleClickTimer = null;
+              if (hiddenPatches.has(key)) {
+                hiddenPatches.delete(key);
+              } else {
+                hiddenPatches.add(key);
+              }
+              scheduleOverlay();
+            }, 250);
           });
 
           patchElements.set(key, patch);
@@ -1557,10 +1721,10 @@
         patch.style.width = `${effWidth}px`;
         patch.style.height = `${effHeight}px`;
 
-        const baseFontSize = Math.max(12, Math.min(32, Math.round((bubble.size || 16) * scaleX)));
+        const baseFontSize = Math.max(currentMinFontSize, Math.min(32, Math.round((bubble.size || 16) * scaleX)));
         patch._baseFontSize = baseFontSize;
         const displayText = getBubbleDisplayText(bubble);
-        const fontSize = computeOptimalFontSize(displayText, baseFontSize, effWidth);
+        const fontSize = computeOptimalFontSize(displayText, baseFontSize, effWidth, effHeight);
 
         const textEl = patch.querySelector('.manga-patch-text');
         const bgLayer = patch.querySelector('.manga-patch-bg');
@@ -2071,10 +2235,12 @@
       (typeof localStorage !== 'undefined' ? localStorage.getItem('comic_ocr_lang') : null) ||
       (globalThis.ComicDebugHUD?.getOcrLang ? globalThis.ComicDebugHUD.getOcrLang() : null) || 'kr';
 
+    const storedConcurrency = parseInt(typeof localStorage !== 'undefined' ? localStorage.getItem('comic_slice_concurrency') : '6', 10) || 6;
+
     captureSession = ComicCaptureFlow.createSession({
       chapterId, api: API, signal: abortController.signal,
       lang: currentLang,
-      concurrency: 6,
+      concurrency: Math.max(1, Math.min(storedConcurrency, 6)),
       validateEntry: entry => {
         const current = entries[entry.pageIndex - 1];
         return current?.img === entry.img && current.imageId === entry.imageId &&
@@ -2148,6 +2314,28 @@
         // 🌟 触发前端大模型双轨调度流式翻译 (首片特快 + 12~15 气泡大包接力)
         if (bubbles.length > 0) {
           dispatchBubblesToLLM(slice, bubbles, batchMeta);
+        } else if (globalThis.ComicPacketInspector) {
+          // 0 气泡切片记录进诊断报告
+          globalThis.ComicPacketInspector.record({
+            sliceTag: `切片 #${completed}`,
+            sliceIndex: slice.sliceIndex,
+            mode: API.includes('127.0.0.1') ? '手机加速 (Mobile 127.0.0.1:8080)' : '云端 (Cloud Serverless)',
+            apiEndpoint: API,
+            slice,
+            bubbles: [],
+            ocr: {
+              sent_at: slice._ocrSentAt || '',
+              received_at: slice._ocrReceivedAt || '',
+              duration_ms: slice._ocrTimeMs || 0,
+              click_to_ocr_ms: slice._clickToOcrMs || 0,
+              bubbles_count: 0
+            },
+            llm: {
+              prepared_at: '', sent_at: '', first_token_at: '', completed_at: '',
+              duration_ms: 0, model: '无需翻译 (0气泡)', endpoint: '',
+              system_prompt: '', user_input: '', raw_response: ''
+            }
+          });
         }
       },
       onBatch: (batchInfo) => {
@@ -2261,6 +2449,7 @@
 
   function togglePreview() {
     previewEnabled = !previewEnabled;
+    scheduleOverlay();
     notify();
     return previewEnabled;
   }
@@ -2297,6 +2486,13 @@
         flushLlmBucket('手动切模型补充大包');
       }
     });
+
+    window.addEventListener('comic-min-font-size-changed', (e) => {
+      const newSize = e?.detail?.minFontSize;
+      if (newSize) {
+        applyMinFontSizeToAllPatches(newSize);
+      }
+    });
   }
 
   globalThis.ComicImageCapture = Object.freeze({
@@ -2322,6 +2518,10 @@
     stop,
     isRunning() { return running || starting; },
     togglePreview,
+    isPreviewActive() { return previewEnabled; },
+    setPreview(val) { previewEnabled = !!val; scheduleOverlay(); notify(); return previewEnabled; },
+    getMinFontSize() { return currentMinFontSize; },
+    setMinFontSize(size) { applyMinFontSizeToAllPatches(size); return currentMinFontSize; },
     handleDomChange,
     scheduleScan,
     getCoordinateIndex() { return coordinateIndex; },

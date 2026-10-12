@@ -1,0 +1,8 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.ComicOCR" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/cyber_violet</item>
+        <item name="android:statusBarColor">@color/midnight_black</item>
+        <item name="android:navigationBarColor">@color/midnight_black</item>
+        <item name="android:windowBackground">@color/midnight_black</item>
+    </style>
+</resources>

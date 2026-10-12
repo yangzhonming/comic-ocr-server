@@ -123,5 +123,198 @@
     return null;
   }
 
-  globalThis.ComicPageShared = { pageKey, chapterKey, isReaderRoute, isSectionContentRoute, ruleKeys, preferredRule, resolveOverride };
+  // 提取漫画作品身份（域名、原始 Slug、归一化 Slug、网站标识键）
+  function extractMangaIdentity(rawUrl) {
+    const url = parsedUrl(rawUrl);
+    if (!url) return null;
+    const host = url.host.toLowerCase();
+    const parts = partsOf(url);
+    if (!parts.length) return null;
+
+    const sectionIndex = parts.findIndex(part => SECTION_NAMES.test(part));
+    let rawSlug = '';
+    if (sectionIndex >= 0 && parts.length > sectionIndex + 1) {
+      rawSlug = parts[sectionIndex + 1];
+    } else {
+      rawSlug = parts[0];
+    }
+
+    // 归一化：剥离常见后缀 (-raw, -free, -online, -manga, -webtoon, -chapter-xxx 等)
+    const cleanSlug = rawSlug
+      .replace(/-(?:raw|free|online|manga|webtoon|eng|color)$/i, '')
+      .replace(/-(?:chapter|chap|ch|ep|episode)[-_ ]?\d+.*$/i, '')
+      .trim();
+
+    return {
+      host,
+      rawSlug,
+      normalizedSlug: cleanSlug || rawSlug,
+      siteKey: `${host}/${cleanSlug || rawSlug}`
+    };
+  }
+
+  globalThis.ComicPageShared = {
+    pageKey, chapterKey, isReaderRoute, isSectionContentRoute, ruleKeys, preferredRule, resolveOverride,
+    extractMangaIdentity
+  };
+
+  // ==========================================
+  // ComicNetBridge: 本地/云端智能双轨网络通道
+  // ==========================================
+  // 1. 本地 HTTP (http://127.0.0.1:8080)：经由 background.js (Service Worker) 转发，
+  //    突破浏览器 HTTPS 页面的 Mixed Content 阻断。
+  // 2. 云端 HTTPS (https://...)：直接前端 fetch，保证云端兼容性。
+  function isLocalHttpUrl(url) {
+    if (!url) return false;
+    const lower = String(url).toLowerCase();
+    return lower.startsWith('http://127.0.0.1') ||
+           lower.startsWith('http://localhost') ||
+           (lower.startsWith('http://') && !lower.startsWith('https://'));
+  }
+
+  async function fetchHealth(apiUrl) {
+    const targetUrl = `${apiUrl.replace(/\/+$/, '')}/health`;
+    if (isLocalHttpUrl(targetUrl) && globalThis.chrome?.runtime?.sendMessage) {
+      return new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage({
+          action: 'OCR_FETCH',
+          url: targetUrl,
+          method: 'GET'
+        }, response => {
+          if (chrome.runtime.lastError) {
+            return reject(new Error(chrome.runtime.lastError.message));
+          }
+          if (!response || !response.ok) {
+            return reject(new Error(response?.error || `HTTP ${response?.status || 0}`));
+          }
+          resolve(response.data || {});
+        });
+      });
+    }
+
+    // 默认前端直接 fetch (云端 HTTPS)
+    const res = await fetch(targetUrl);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json().catch(() => ({}));
+  }
+
+  async function postCoordinates(apiUrl, jsonBody, signal) {
+    const targetUrl = `${apiUrl.replace(/\/+$/, '')}/coordinates`;
+    if (isLocalHttpUrl(targetUrl) && globalThis.chrome?.runtime?.sendMessage) {
+      return new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage({
+          action: 'OCR_FETCH',
+          url: targetUrl,
+          method: 'POST',
+          jsonBody
+        }, response => {
+          if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+          if (!response || !response.ok) return reject(new Error(response?.error || `HTTP ${response?.status}`));
+          resolve(response.data || {});
+        });
+      });
+    }
+    const response = await fetch(targetUrl, {
+      method: "POST", signal,
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(jsonBody)
+    });
+    return await response.json().catch(() => ({}));
+  }
+
+  async function postSlice(apiUrl, { sliceBlob, sliceName, cutIndex, chapterId, coordinateId, sliceIndex, startY, endY, width, height, sourcePages, cutMethod, batchIndex, isFinalBatch, lang, detThresh, detBoxThresh, recScore, signal }) {
+    const targetUrl = `${apiUrl.replace(/\/+$/, '')}/slice`;
+
+    if (isLocalHttpUrl(targetUrl) && globalThis.chrome?.runtime?.sendMessage) {
+      // 提取 Blob 为 Base64 字符串（彻底避免移动端 Chromium 在 sendMessage 序列化 ArrayBuffer 时丢失数据）
+      const base64Data = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(sliceBlob);
+      });
+
+      return new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage({
+          action: 'OCR_FETCH',
+          url: targetUrl,
+          method: 'POST',
+          isFormData: true,
+          fields: {
+            slice_name: String(sliceName),
+            cut_index: String(cutIndex),
+            chapter_id: String(chapterId || ''),
+            coordinate_id: String(coordinateId || ''),
+            slice_index: String(sliceIndex),
+            start_y: String(startY),
+            end_y: String(endY),
+            width: String(width),
+            height: String(height),
+            source_pages: JSON.stringify(sourcePages || []),
+            cut_method: String(cutMethod || ''),
+            batch_index: String(batchIndex),
+            is_final_batch: String(Boolean(isFinalBatch)),
+            lang: String(lang || 'kr'),
+            det_thresh: String(detThresh || '0.30'),
+            det_box_thresh: String(detBoxThresh || '0.50'),
+            rec_score: String(recScore || '0.60')
+          },
+          file: {
+            name: `${sliceName}.jpg`,
+            type: sliceBlob.type || 'image/jpeg',
+            base64: base64Data
+          }
+        }, response => {
+          if (chrome.runtime.lastError) {
+            return reject(new Error(chrome.runtime.lastError.message));
+          }
+          if (!response || !response.ok) {
+            const err = new Error(response?.error || `HTTP ${response?.status || 0}`);
+            err.status = response?.status || 0;
+            err.detail = response?.data?.detail || response?.error;
+            return reject(err);
+          }
+          resolve(response.data || {});
+        });
+      });
+    }
+
+    // 云端 HTTPS: 原生 FormData 前端直连
+    const form = new FormData();
+    form.append("file", sliceBlob, `${sliceName}.jpg`);
+    form.append("slice_name", sliceName);
+    form.append("cut_index", String(cutIndex));
+    form.append("chapter_id", chapterId);
+    form.append("coordinate_id", coordinateId);
+    form.append("slice_index", String(sliceIndex));
+    form.append("start_y", String(startY));
+    form.append("end_y", String(endY));
+    form.append("width", String(width));
+    form.append("height", String(height));
+    form.append("source_pages", JSON.stringify(sourcePages));
+    form.append("cut_method", cutMethod);
+    form.append("batch_index", String(batchIndex));
+    form.append("is_final_batch", String(Boolean(isFinalBatch)));
+    form.append("lang", lang);
+    form.append("det_thresh", detThresh);
+    form.append("det_box_thresh", detBoxThresh);
+    form.append("rec_score", recScore);
+
+    const response = await fetch(targetUrl, { method: "POST", body: form, signal });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const err = new Error(result.detail || `Slice upload failed: HTTP ${response.status}`);
+      err.status = response.status;
+      err.detail = result.detail;
+      throw err;
+    }
+    return result;
+  }
+
+  globalThis.ComicNetBridge = {
+    isLocalHttpUrl,
+    fetchHealth,
+    postCoordinates,
+    postSlice
+  };
 })();

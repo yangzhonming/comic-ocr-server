@@ -1,13 +1,16 @@
 {
   "manifest_version": 3,
-  "name": "漫画切片与补丁测试版",
-  "version": "0.8.6",
-  "description": "长漫阅读器汉化插件：支持多通道物理材质分流、纯白羽化气泡、高遮盖自适应羽化光罩、非白纯色补丁同色羽化、场景画外音360°纯白描边悬浮、闭包Shadow DOM全方位护眼插件与深色模式免疫。",
+  "name": "ComicTranslate 漫画切片与智能汉化插件",
+  "version": "1.0.0",
+  "description": "长漫阅读器汉化插件：支持气泡紧致防溢出贴合、彻底消除补丁纵向超长、多通道物理材质分流、闭包Shadow DOM全方位护眼；新增设置页【调试与优化】面板、单次Dev看板、切线辅助线开关与双击全量导出Dev诊断报告。",
   "permissions": ["activeTab", "storage", "declarativeNetRequest"],
-  "host_permissions": ["<all_urls>", "http://127.0.0.1:*/*", "http://127.0.0.1:8765/*", "http://127.0.0.1:9000/*", "http://127.0.0.1:8000/*"],
+  "host_permissions": ["<all_urls>", "http://127.0.0.1:*/*", "http://127.0.0.1:8080/*", "http://localhost:*/*"],
   "action": {
     "default_title": "漫画页面识别",
     "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
   },
   "content_scripts": [
     {

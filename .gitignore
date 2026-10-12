@@ -11,7 +11,22 @@ debug_output/
 tests/data/
 tests/output/
 
+# Android Build & IDE artifacts
+*.apk
+build/
+.cxx/
+.gradle/
+local.properties
+.idea/
+*.iml
+
+# Chrome Extension artifacts
 _metadata/
+plugin/_metadata/
+
+# General
 *.lnk
-*.zip
+scratch/
 WSL_HANDOVER.md
+*.zip
+!comic-translate-plugin-v1.0.0.zip

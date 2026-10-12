@@ -2,7 +2,7 @@
   // 独立开发者诊断面板 (Dev HUD)
   // 测试阶段默认开启（上线时可将 DEFAULT_DEBUG 改为 false）。
   // 支持通过控制台全局指令 window.enableComicDebug() / disableComicDebug() 随时开关。
-  const DEFAULT_DEBUG = true;
+  const DEFAULT_DEBUG = false;
   let host = null;
   let root = null;
   let isVisible = false;
@@ -12,12 +12,37 @@
     try {
       if (typeof localStorage === 'undefined') return DEFAULT_DEBUG;
       const val = localStorage.getItem('comic_debug');
-      if (val === '0' || val === 'false') return false;
       if (val === '1' || val === 'true') return true;
-      return DEFAULT_DEBUG;
+      return false;
     } catch {
-      return DEFAULT_DEBUG;
+      return false;
     }
+  }
+
+  function openOnce() {
+    setVisible(true);
+    console.log('%c[ComicDebug]%c 开发者诊断看版已唤起（单次生效）！', 'color:#38bdf8;font-weight:bold;', 'color:inherit;');
+  }
+
+  function triggerBlobDownload(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 100);
+  }
+
+  function getCapturedContainerHtml() {
+    const html = globalThis.ComicImageCapture?.getReaderHtml?.();
+    if (html && html.trim().length > 0) return html;
+    const fallbackEl = document.querySelector('.reading-content, #reader, .reader-container, .chapter-content, .viewer-cnt, #viewer, .comic-container');
+    if (fallbackEl) return fallbackEl.outerHTML;
+    return document.body ? document.body.innerHTML : '';
   }
 
   function ensureHUD() {
@@ -30,17 +55,17 @@
       <style>
         :host { all: initial; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
         .hud {
-          width: 270px;
+          width: 300px;
           padding: 12px 14px;
-          border-radius: 10px;
-          background: rgba(15, 23, 42, 0.92);
-          backdrop-filter: blur(8px);
-          -webkit-backdrop-filter: blur(8px);
+          border-radius: 12px;
+          background: rgba(15, 23, 42, 0.94);
+          backdrop-filter: blur(10px);
+          -webkit-backdrop-filter: blur(10px);
           border: 1px solid rgba(56, 189, 248, 0.35);
           color: #e2e8f0;
           font-size: 11px;
           line-height: 1.5;
-          box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6), 0 0 15px rgba(56, 189, 248, 0.15);
+          box-shadow: 0 12px 30px rgba(0, 0, 0, 0.7), 0 0 16px rgba(56, 189, 248, 0.15);
         }
         .header {
           display: flex;
@@ -52,6 +77,13 @@
           font-weight: 700;
           font-size: 12px;
           color: #38bdf8;
+          cursor: grab;
+          user-select: none;
+          -webkit-user-select: none;
+          touch-action: none;
+        }
+        .header:active {
+          cursor: grabbing;
         }
         .close-btn {
           background: none;
@@ -67,6 +99,7 @@
         .section-title {
           color: #94a3b8;
           font-size: 10px;
+          font-weight: 700;
           text-transform: uppercase;
           letter-spacing: 0.5px;
           margin-bottom: 3px;
@@ -90,11 +123,12 @@
           background: rgba(30, 41, 59, 0.6);
           padding: 4px 8px;
           border-radius: 6px;
-          margin-top: 2px;
+          margin-top: 4px;
+          font-size: 10px;
         }
         .btn-action {
           width: 100%;
-          padding: 6px 0;
+          padding: 5px 0;
           border-radius: 6px;
           border: 1px solid rgba(56, 189, 248, 0.4);
           background: rgba(14, 165, 233, 0.15);
@@ -111,12 +145,17 @@
         }
       </style>
       <div class="hud">
-        <div class="header">
-          <span>🛠️ Dev HUD v0.8.6</span>
-          <button class="close-btn" title="关闭面板 (Console 输入 enableComicDebug() 重新开启)">✕</button>
+        <div class="header" title="拖动此处可移动面板位置">
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span>🛠️ Dev HUD 诊断看版</span>
+            <span style="font-size:9px;padding:1px 5px;border-radius:4px;background:rgba(245,158,11,0.2);color:#f59e0b;font-weight:normal;">可拖动 · 单次生效</span>
+          </div>
+          <button class="close-btn" title="关闭面板">✕</button>
         </div>
+
+        <!-- 模块 1: 切片进度与在途并发 -->
         <div class="section">
-          <div class="section-title">切片遥测 (Capture Telemetry)</div>
+          <div class="section-title">📦 切片进度与在途并发 (Pipeline)</div>
           <div class="stat-grid">
             <div class="stat-item"><span class="stat-label">总图片</span><span class="stat-val" id="val-total">0</span></div>
             <div class="stat-item"><span class="stat-label">已切片</span><span class="stat-val highlight" id="val-slices">0</span></div>
@@ -125,212 +164,95 @@
             <div class="stat-item"><span class="stat-label">📦 已完成</span><span class="stat-val highlight" id="val-batches">0</span></div>
             <div class="stat-item"><span class="stat-label">🚀 在途并发</span><span class="stat-val" id="val-pending-batch">0</span></div>
           </div>
-        </div>
-        <div class="section">
-          <div class="section-title">流水线遥测 (Pipeline Status)</div>
           <div class="status-text" id="val-status">就绪待命</div>
         </div>
-        <div class="section">
-          <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#94a3b8;cursor:pointer;margin-bottom:8px;">
-            <input type="checkbox" id="chk-enable-capture" style="accent-color:#38bdf8;">
-            <span style="color:#f8fafc;font-weight:600;">💻 优先使用本地 OCR (127.0.0.1:8000)</span>
-          </label>
-          <div id="container-cloud-ocr-url" style="margin-bottom:8px;">
-            <div style="font-size:10px;color:#94a3b8;margin-bottom:2px;">☁️ 云端 OCR 服务地址:</div>
-            <input type="text" id="input-cloud-ocr-url" placeholder="https://<your-fc-endpoint>.cn-shenzhen.fcapp.run" style="width:100%;box-sizing:border-box;background:rgba(15,23,42,0.9);border:1px solid rgba(56,189,248,0.3);border-radius:4px;color:#f8fafc;padding:3px 6px;font-size:10px;font-family:monospace;outline:none;">
-          </div>
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;font-size:11px;color:#94a3b8;background:rgba(30,41,59,0.6);padding:4px 8px;border-radius:6px;">
-            <span>识别语种:</span>
-            <select id="select-ocr-lang" style="background:rgba(15,23,42,0.9);border:1px solid rgba(56,189,248,0.3);border-radius:4px;color:#38bdf8;padding:2px 6px;font-size:11px;font-weight:600;outline:none;">
-              <option value="kr">🇰🇷 韩语 (KR)</option>
-              <option value="ja">🇯🇵 日语 (JA)</option>
-              <option value="en">🇺🇸 英语 (EN)</option>
-              <option value="es">🇪🇸 西班牙语 (ES)</option>
-              <option value="ru">🇷🇺 俄语 (RU)</option>
-            </select>
-          </div>
-          <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#94a3b8;cursor:pointer;margin-bottom:8px;">
-            <input type="checkbox" id="chk-local-truecase" style="accent-color:#38bdf8;">
-            <span style="color:#f8fafc;font-weight:600;">🔤 英文本地转译 (大写转自然阅读体)</span>
-          </label>
-          <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#94a3b8;cursor:pointer;margin-bottom:8px;">
-            <input type="checkbox" id="chk-auto-clear" style="accent-color:#38bdf8;">
-            <span>测试模式：刷新自动清理缓存</span>
-          </label>
-          <div style="display:flex;gap:6px;">
-            <button class="btn-action" id="btn-toggle-overlay">辅助线</button>
-            <button class="btn-action" id="btn-clear-cache" style="border-color:rgba(239,68,68,0.5);background:rgba(239,68,68,0.15);color:#f87171;">🧹 清缓存并刷新</button>
-          </div>
-        </div>
+
+        <!-- 模块 2: 耗时与极速链路透视 -->
         <div class="section" id="section-pipeline-telemetry" style="border-top:1px solid rgba(148,163,184,0.2);padding-top:8px;">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-            <div class="section-title" style="margin:0;">🚀 极速链路遥测 (Pipeline Latency)</div>
+            <div class="section-title" style="margin:0;">⚡ 极速双轨耗时透视 (Latency)</div>
             <span id="val-prewarm-badge" style="font-size:10px;padding:1px 5px;border-radius:4px;background:rgba(56,189,248,0.2);color:#38bdf8;">🔥 预热中...</span>
           </div>
-          <div class="stat-grid" style="margin-bottom:6px;">
+          <div class="stat-grid">
             <div class="stat-item"><span class="stat-label">首图就绪</span><span class="stat-val highlight" id="val-first-img-time">-- ms</span></div>
             <div class="stat-item"><span class="stat-label">首片生成</span><span class="stat-val highlight" id="val-slice0-gen-time">-- ms</span></div>
-            <div class="stat-item"><span class="stat-label">⚡ 点击到首OCR</span><span class="stat-val highlight" id="val-click-ocr-time">-- ms</span></div>
+            <div class="stat-item"><span class="stat-label">⚡ 点击→首OCR</span><span class="stat-val highlight" id="val-click-ocr-time">-- ms</span></div>
             <div class="stat-item"><span class="stat-label">📦 前6片全OCR</span><span class="stat-val" id="val-top6-ocr-time">-- ms</span></div>
             <div class="stat-item"><span class="stat-label">💬 首片气泡</span><span class="stat-val highlight" id="val-slice0-bubbles">--</span></div>
             <div class="stat-item"><span class="stat-label">📚 前6片总气泡</span><span class="stat-val warn" id="val-top6-bubbles">--</span></div>
             <div class="stat-item"><span class="stat-label">✨ 首字TTFB</span><span class="stat-val highlight" id="val-llm-ttfb">-- ms</span></div>
             <div class="stat-item"><span class="stat-label">🏁 首片LLM总耗</span><span class="stat-val" id="val-llm-total">-- ms</span></div>
+            <div class="stat-item"><span class="stat-label">⏱️ 最近OCR</span><span class="stat-val highlight" id="val-ocr-time">-- ms</span></div>
+            <div class="stat-item"><span class="stat-label">⚡ 最近LLM</span><span class="stat-val highlight" id="val-llm-time">-- ms</span></div>
           </div>
         </div>
-        <div class="section" id="section-telemetry" style="border-top:1px solid rgba(148,163,184,0.2);padding-top:8px;">
+
+        <!-- 模块 3: 诊断导出 (全景打包) -->
+        <div class="section" style="border-top:1px solid rgba(148,163,184,0.2);padding-top:8px;margin-bottom:0;">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-            <div class="section-title" style="margin:0;">⚡ 耗时与全景诊断透视</div>
-            <div style="display:flex;gap:4px;">
-              <button id="btn-export-txt-report" class="btn-action" style="padding:1px 6px;font-size:10px;border-color:rgba(46,213,115,0.4);background:rgba(46,213,115,0.15);color:#2ed573;">💾 导出报告 (.txt)</button>
-              <button id="btn-copy-txt-report" class="btn-action" style="padding:1px 6px;font-size:10px;">📋 复制报告</button>
-            </div>
-          </div>
-          <div style="margin-bottom:6px;">
-            <button id="btn-share-txt-report" class="btn-action" style="width:100%;padding:5px 0;font-size:11px;border-color:rgba(37,211,102,0.5);background:rgba(37,211,102,0.18);color:#25d366;font-weight:700;">📤 一键分享诊断报告到微信 (.txt)</button>
-          </div>
-          <div style="display:flex;gap:6px;margin-bottom:6px;">
-            <div class="stat-item" style="flex:1;"><span class="stat-label">⏱️ OCR 耗时</span><span class="stat-val highlight" id="val-ocr-time">-- ms</span></div>
-            <div class="stat-item" style="flex:1;"><span class="stat-label">⚡ LLM 耗时</span><span class="stat-val highlight" id="val-llm-time">-- ms</span></div>
-          </div>
-          <div style="margin-bottom:6px;">
-            <div style="display:flex;justify-content:space-between;font-size:10px;color:#94a3b8;margin-bottom:2px;">
-              <span>📤 发送请求包 (输入)</span>
-              <span id="label-req-slice" style="color:#38bdf8;">--</span>
-            </div>
-            <pre id="val-req-packet" style="margin:0;max-height:75px;overflow-y:auto;background:rgba(15,23,42,0.85);border:1px solid rgba(56,189,248,0.2);padding:6px;border-radius:4px;font-size:10px;color:#e2e8f0;white-space:pre-wrap;word-break:break-all;font-family:inherit;">(等待切片发送...)</pre>
-          </div>
-          <div>
-            <div style="display:flex;justify-content:space-between;font-size:10px;color:#94a3b8;margin-bottom:2px;">
-              <span>📥 返回响应包 (大模型流)</span>
-              <span id="label-res-model" style="color:#2ed573;">--</span>
-            </div>
-            <pre id="val-res-packet" style="margin:0;max-height:75px;overflow-y:auto;background:rgba(15,23,42,0.85);border:1px solid rgba(46,213,115,0.2);padding:6px;border-radius:4px;font-size:10px;color:#a7f3d0;white-space:pre-wrap;word-break:break-all;font-family:inherit;">(等待大模型响应...)</pre>
-          </div>
-        </div>
-        <div class="section" id="section-container-dom" style="border-top:1px solid rgba(148,163,184,0.2);padding-top:8px;">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-            <div class="section-title" style="margin:0;">📦 容器 DOM 捕获与分享</div>
+            <div class="section-title" style="margin:0;">💾 诊断导出 (全景打包)</div>
             <span id="label-container-info" style="font-size:10px;color:#38bdf8;">就绪待命</span>
           </div>
-          <div style="display:flex;flex-direction:column;gap:5px;">
-            <button id="btn-share-container-dom" class="btn-action" style="padding:5px 0;font-size:11px;border-color:rgba(37,211,102,0.5);background:rgba(37,211,102,0.18);color:#25d366;font-weight:700;">📤 分享容器到微信</button>
-            <div style="display:flex;gap:4px;">
-              <button id="btn-export-container-html" class="btn-action" style="flex:1;padding:3px 0;font-size:10px;border-color:rgba(56,189,248,0.4);background:rgba(14,165,233,0.15);color:#38bdf8;">💾 导出 HTML</button>
-              <button id="btn-copy-container-html" class="btn-action" style="flex:1;padding:3px 0;font-size:10px;">📋 复制容器代码</button>
-            </div>
+          <div style="display:flex;flex-direction:column;gap:6px;">
+            <button id="btn-export-txt-report" class="btn-action" style="padding:5px 0;font-size:10px;border-color:rgba(46,213,115,0.4);background:rgba(46,213,115,0.18);color:#2ed573;font-weight:700;">💾 导出全量诊断报告 (.txt)</button>
+            <button id="btn-export-container-html" class="btn-action" style="padding:4px 0;font-size:10px;border-color:rgba(56,189,248,0.4);background:rgba(14,165,233,0.12);color:#38bdf8;">🌐 导出页面镜像包 (.html)</button>
           </div>
         </div>
       </div>
     `;
+
+    // 拖动支持 (指针事件，同时兼容鼠标与触控)
+    const headerEl = root.querySelector('.header');
+    let isDragging = false;
+    let startX = 0;
+    let startY = 0;
+    let initialLeft = 0;
+    let initialTop = 0;
+
+    headerEl.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('.close-btn')) return;
+      isDragging = true;
+      headerEl.setPointerCapture(e.pointerId);
+      const rect = host.getBoundingClientRect();
+      host.style.right = 'auto';
+      host.style.bottom = 'auto';
+      host.style.left = `${rect.left}px`;
+      host.style.top = `${rect.top}px`;
+      startX = e.clientX;
+      startY = e.clientY;
+      initialLeft = rect.left;
+      initialTop = rect.top;
+      e.preventDefault();
+    });
+
+    headerEl.addEventListener('pointermove', (e) => {
+      if (!isDragging) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      const maxL = Math.max(0, window.innerWidth - 310);
+      const maxT = Math.max(0, window.innerHeight - 80);
+      const newLeft = Math.max(0, Math.min(maxL, initialLeft + dx));
+      const newTop = Math.max(0, Math.min(maxT, initialTop + dy));
+      host.style.left = `${newLeft}px`;
+      host.style.top = `${newTop}px`;
+    });
+
+    const stopDrag = (e) => {
+      if (isDragging) {
+        isDragging = false;
+        try { headerEl.releasePointerCapture(e.pointerId); } catch {}
+      }
+    };
+    headerEl.addEventListener('pointerup', stopDrag);
+    headerEl.addEventListener('pointercancel', stopDrag);
+
     root.querySelector('.close-btn').addEventListener('click', () => {
-      disableComicDebug();
+      setVisible(false);
     });
-    root.querySelector('#btn-toggle-overlay').addEventListener('click', () => {
-      globalThis.ComicImageCapture?.togglePreview();
-    });
-    root.querySelector('#btn-copy-txt-report').addEventListener('click', () => {
-      const txt = PacketInspector.generatePlainTextReport();
-      navigator.clipboard.writeText(txt).then(() => {
-        alert('已成功复制纯文本诊断报告 (.txt)！\n可直接在微信聊天框长按粘贴发送给开发者。');
-      }).catch(() => {
-        alert('剪贴板复制失败，请点击【导出报告】保存为文件。');
-      });
-    });
+
 
     root.querySelector('#btn-export-txt-report').addEventListener('click', () => {
-      const txt = PacketInspector.generatePlainTextReport();
-      try {
-        const blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-        const filename = `comic-diagnostic-${timestamp}.txt`;
-        triggerBlobDownload(blob, filename);
-      } catch (err) {
-        alert('导出失败: ' + (err?.message || String(err)));
-      }
-    });
-
-    root.querySelector('#btn-share-txt-report').addEventListener('click', async () => {
-      const txt = PacketInspector.generatePlainTextReport();
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      const filename = `comic-diagnostic-${timestamp}.txt`;
-      const blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
-      const file = new File([blob], filename, { type: 'text/plain;charset=utf-8' });
-
-      if (typeof navigator !== 'undefined' && navigator.canShare && navigator.canShare({ files: [file] })) {
-        try {
-          await navigator.share({
-            title: '漫画全景翻译诊断报告',
-            text: `从 ${location.hostname} 导出的切片坐标与翻译诊断报告 (.txt)`,
-            files: [file]
-          });
-          return;
-        } catch (err) {
-          if (err.name === 'AbortError') return;
-          console.warn('[ComicHUD] Web Share API 失败，降级为导出与复制:', err);
-        }
-      }
-
-      triggerBlobDownload(blob, filename);
-      try {
-        await navigator.clipboard.writeText(txt);
-        alert(`已生成诊断报告 [${filename}] 并已复制全文！\n文件已存入手机下载目录，同时文本已在剪贴板中，可直接在微信发送给开发者。`);
-      } catch {
-        alert(`已生成并下载诊断报告 [${filename}]！\n请在微信中选择该文本文件发送给开发者。`);
-      }
-    });
-
-    function getCapturedContainerHtml() {
-      const html = globalThis.ComicImageCapture?.getReaderHtml?.();
-      if (html && html.trim().length > 0) return html;
-      const fallbackEl = document.querySelector('.reading-content, #reader, .reader-container, .chapter-content, .viewer-cnt, #viewer, .comic-container');
-      if (fallbackEl) return fallbackEl.outerHTML;
-      return document.body ? document.body.innerHTML : '';
-    }
-
-    function triggerBlobDownload(blob, filename) {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => {
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      }, 100);
-    }
-
-    root.querySelector('#btn-share-container-dom').addEventListener('click', async () => {
-      const html = getCapturedContainerHtml();
-      if (!html) return alert('未找到漫画容器元素');
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      const filename = `comic-container-${location.hostname}-${timestamp}.html`;
-      const fullDoc = `<!DOCTYPE html>\n<html>\n<head>\n  <meta charset="utf-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>Comic Container - ${location.hostname}</title>\n</head>\n<body>\n${html}\n</body>\n</html>`;
-      const blob = new Blob([fullDoc], { type: 'text/html' });
-      const file = new File([blob], filename, { type: 'text/html' });
-
-      if (typeof navigator !== 'undefined' && navigator.canShare && navigator.canShare({ files: [file] })) {
-        try {
-          await navigator.share({
-            title: `漫画容器代码 (${location.hostname})`,
-            text: `从 ${location.href} 捕获的漫画阅读器 HTML 容器结构`,
-            files: [file]
-          });
-          return;
-        } catch (err) {
-          if (err.name === 'AbortError') return;
-          console.warn('[ComicHUD] Web Share API 失败，降级为导出文件:', err);
-        }
-      }
-
-      triggerBlobDownload(blob, filename);
-      try {
-        await navigator.clipboard.writeText(`已生成容器代码文件: ${filename}，已保存至下载目录，可发送给开发者。`);
-        alert(`已生成并下载容器文件 [${filename}]！\n\n当前浏览器环境未直接弹出微信分享，文件已保存到本地下载文件夹，请在微信中选择发送。`);
-      } catch {
-        alert(`已生成并下载容器文件 [${filename}]！\n请在微信中选择发送。`);
-      }
+      PacketInspector.downloadDiagnosticReport();
     });
 
     root.querySelector('#btn-export-container-html').addEventListener('click', () => {
@@ -343,107 +265,6 @@
       triggerBlobDownload(blob, filename);
     });
 
-    root.querySelector('#btn-copy-container-html').addEventListener('click', async () => {
-      const html = getCapturedContainerHtml();
-      if (!html) return alert('未找到漫画容器元素');
-      try {
-        await navigator.clipboard.writeText(html);
-        alert(`已成功复制容器 HTML 代码！(大小: ${(html.length / 1024).toFixed(1)} KB)\n可直接在微信中粘贴发送。`);
-      } catch (err) {
-        alert('复制到剪贴板失败: ' + (err?.message || String(err)));
-      }
-    });
-
-    const captureChk = root.querySelector('#chk-enable-capture');
-    const cloudUrlInput = root.querySelector('#input-cloud-ocr-url');
-    const langSelect = root.querySelector('#select-ocr-lang');
-
-    const captureVal = typeof localStorage !== 'undefined' ? localStorage?.getItem?.('comic_dev_enable_capture') : null;
-    captureChk.checked = captureVal === '1' || captureVal === 'true';
-
-    captureChk.addEventListener('change', () => {
-      if (typeof localStorage === 'undefined') return;
-      localStorage.setItem('comic_dev_enable_capture', captureChk.checked ? '1' : '0');
-      console.log(`[ComicDebug] 本地模式: ${captureChk.checked ? '已启用 (127.0.0.1:8000)' : '已停用 (云端)'}`);
-    });
-
-    if (cloudUrlInput) {
-      cloudUrlInput.value = (typeof localStorage !== 'undefined' ? localStorage.getItem('comic_cloud_api_url') : '') || '';
-      cloudUrlInput.addEventListener('change', () => {
-        if (typeof localStorage !== 'undefined') {
-          localStorage.setItem('comic_cloud_api_url', cloudUrlInput.value.trim());
-          console.log(`[ComicDebug] 云端 OCR 地址已更新: ${cloudUrlInput.value.trim()}`);
-        }
-      });
-    }
-
-    if (langSelect) {
-      langSelect.value = getOcrLang();
-      langSelect.addEventListener('change', () => {
-        const val = normalizeLang(langSelect.value);
-        if (typeof localStorage !== 'undefined') {
-          try {
-            localStorage.setItem('comic_ocr_lang', val);
-          } catch {}
-        }
-        console.log(`[ComicDebug] 识别语种切换为: ${val}`);
-        if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
-          try {
-            window.dispatchEvent(new CustomEvent('comic_ocr_lang_changed', { detail: { lang: val, source: 'debug-hud' } }));
-          } catch {}
-        }
-      });
-
-      const syncDebugHudLang = (lang) => {
-        const target = lang ? normalizeLang(lang) : getOcrLang();
-        if (langSelect.value !== target) {
-          langSelect.value = target;
-        }
-      };
-
-      if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-        window.addEventListener('comic_ocr_lang_changed', (e) => {
-          if (e.detail?.source !== 'debug-hud') {
-            syncDebugHudLang(e.detail?.lang);
-          }
-        });
-        window.addEventListener('storage', (e) => {
-          if (e.key === 'comic_ocr_lang') {
-            syncDebugHudLang(e.newValue);
-          }
-        });
-      }
-    }
-
-    const autoClearChk = root.querySelector('#chk-auto-clear');
-    const autoClearVal = typeof localStorage !== 'undefined' ? localStorage?.getItem?.('comic_dev_auto_clear_cache') : null;
-    autoClearChk.checked = autoClearVal !== '0' && autoClearVal !== 'false';
-    autoClearChk.addEventListener('change', () => {
-      if (typeof localStorage === 'undefined') return;
-      if (autoClearChk.checked) {
-        localStorage.setItem('comic_dev_auto_clear_cache', '1');
-      } else {
-        localStorage.setItem('comic_dev_auto_clear_cache', '0');
-      }
-    });
-
-    const truecaseChk = root.querySelector('#chk-local-truecase');
-    const truecaseVal = typeof localStorage !== 'undefined' ? localStorage?.getItem?.('comic_local_truecase_enabled') : null;
-    truecaseChk.checked = truecaseVal === '1' || truecaseVal === 'true';
-    truecaseChk.addEventListener('change', () => {
-      if (typeof localStorage === 'undefined') return;
-      localStorage.setItem('comic_local_truecase_enabled', truecaseChk.checked ? '1' : '0');
-      console.log(`[ComicDebug] 英文本地转译模式: ${truecaseChk.checked ? '已启用 (大写转自然阅读流)' : '已停用'}`);
-      if (globalThis.ComicImageOverlay?.scheduleOverlay) {
-        globalThis.ComicImageOverlay.scheduleOverlay();
-      }
-    });
-    root.querySelector('#btn-clear-cache').addEventListener('click', async () => {
-      if (globalThis.ComicImageCapture?.clearCaches) {
-        await globalThis.ComicImageCapture.clearCaches();
-      }
-      location.reload();
-    });
     document.documentElement.appendChild(host);
   }
 
@@ -489,7 +310,7 @@
         display_time: new Date().toLocaleTimeString(),
         sliceTag: entry.sliceTag || '切片',
         sliceIndex: entry.sliceIndex || 0,
-        mode: entry.mode || (entry.apiEndpoint?.includes('127.0.0.1') ? '本地 (Local 127.0.0.1:8000)' : '云端 (Cloud Serverless)'),
+        mode: entry.mode || (entry.apiEndpoint?.includes('127.0.0.1') ? '手机加速 (Mobile 127.0.0.1:8080)' : '云端 (Cloud Serverless)'),
         apiEndpoint: entry.apiEndpoint || '',
         slice: entry.slice || null,
         bubbles: entry.bubbles || [],
@@ -697,16 +518,42 @@
         out += '✅ 当前活动的 DOM 补丁无物理重叠冲突。\n\n';
       }
 
-      // 4. 详细切片日志
+      // 4. 运行捕获异常记录 (Errors)
+      const capturedErrors = (globalThis.ComicErrorTracker?.list ? globalThis.ComicErrorTracker.list() : []);
       out += '================================================================================\n';
-      out += '[逐切片时序明细与原始报文记录]\n';
+      out += `[运行捕获异常清单 (共 ${capturedErrors.length} 项)]\n`;
+      out += '================================================================================\n';
+      if (capturedErrors.length === 0) {
+        out += '✅ 暂无拦截到的运行异常，切片与推理运行顺畅。\n\n';
+      } else {
+        for (const err of capturedErrors) {
+          out += `❌ [${err.time || '--'}] 类型: ${err.type} | 切片: ${err.sliceTag}\n`;
+          out += `   详情: ${err.detail}\n\n`;
+        }
+      }
+
+      // 5. 详细逐切片原始报文与完整 OCR JSON 数据
+      out += '================================================================================\n';
+      out += '[逐切片时序明细、完整 OCR 气泡 JSON 与大模型报文记录]\n';
       out += '================================================================================\n';
       for (const s of slices) {
         out += `--------------------------------------------------------------------------------\n`;
         out += `${s.sliceTag} (记录于 ${s.display_time})\n`;
+        if (s.slice) {
+          out += `  切片坐标: Y=${s.slice.startY}~${s.slice.endY}px (高度: ${s.slice.height}px, 宽度: ${s.slice.width}px, 落刀: ${s.slice.cutMethod || 'standard'})\n`;
+        }
         const clickOcrInfo = s.ocr?.click_to_ocr_ms ? ` (首屏端到端: ${s.ocr.click_to_ocr_ms}ms)` : '';
         out += `  OCR: 耗时 ${s.ocr?.duration_ms || 0}ms${clickOcrInfo}, 检出气泡 ${s.ocr?.bubbles_count || 0} 个\n`;
+        if (s.ocr?.sent_at) out += `  OCR 时间戳: 发送 ${s.ocr.sent_at} | 接收 ${s.ocr.received_at || '--'}\n`;
+        if (s.bubbles && s.bubbles.length > 0) {
+          out += `  【OCR 原始气泡 JSON 数据 (${s.bubbles.length}处)】:\n`;
+          out += JSON.stringify(s.bubbles, null, 2).split('\n').map(l => '    ' + l).join('\n') + '\n';
+        } else {
+          out += `  【OCR 原始气泡 JSON 数据】: [] (0 处气泡检出)\n`;
+        }
+
         out += `  LLM: 耗时 ${s.llm?.duration_ms || 0}ms, 模型 ${s.llm?.model || '无'}\n`;
+        if (s.llm?.sent_at) out += `  LLM 时间戳: 发送 ${s.llm.sent_at} | 完成 ${s.llm.completed_at || '--'}\n`;
         if (s.llm?.user_input) {
           out += `  【LLM 输入】:\n${s.llm.user_input.split('\n').map(l => '    ' + l).join('\n')}\n`;
         }
@@ -718,6 +565,18 @@
       out += '                           REPORT END\n';
       out += '================================================================================\n';
       return out;
+    },
+    async downloadDiagnosticReport() {
+      const txt = this.generatePlainTextReport();
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const filename = `comic-diagnostic-${timestamp}.txt`;
+      try {
+        const blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
+        triggerBlobDownload(blob, filename);
+      } catch (err) {
+        console.error('[ComicPacketInspector] 下载报告异常:', err);
+      }
+      return { filename, text: txt };
     }
   };
   globalThis.ComicPacketInspector = PacketInspector;
@@ -756,30 +615,39 @@
       if (llmTot && telem.firstLlmTotalMs) llmTot.textContent = `${telem.firstLlmTotalMs} ms`;
     }
 
-    // 2. 更新最新切片报文与耗时
+    // 2. 更新最新切片耗时
     const pkt = PacketInspector.getLatest();
-    if (!pkt) return;
-    const ocrEl = root.querySelector('#val-ocr-time');
-    const llmEl = root.querySelector('#val-llm-time');
-    const sliceLabel = root.querySelector('#label-req-slice');
-    const modelLabel = root.querySelector('#label-res-model');
-    const reqEl = root.querySelector('#val-req-packet');
-    const resEl = root.querySelector('#val-res-packet');
+    if (pkt) {
+      const ocrEl = root.querySelector('#val-ocr-time');
+      const llmEl = root.querySelector('#val-llm-time');
+      const ocrMs = pkt.ocr?.duration_ms ?? pkt.ocrTimeMs ?? 0;
+      const llmMs = pkt.llm?.duration_ms ?? pkt.llmTimeMs ?? 0;
+      if (ocrEl) {
+        const clickOcrTag = pkt.ocr?.click_to_ocr_ms ? ` (首片端到端: ${pkt.ocr.click_to_ocr_ms}ms)` : '';
+        ocrEl.textContent = `${ocrMs} ms${clickOcrTag}`;
+      }
+      if (llmEl) llmEl.textContent = `${llmMs} ms`;
+    }
 
-    const ocrMs = pkt.ocr?.duration_ms ?? pkt.ocrTimeMs ?? 0;
-    const llmMs = pkt.llm?.duration_ms ?? pkt.llmTimeMs ?? 0;
-    if (ocrEl) {
-      const clickOcrTag = pkt.ocr?.click_to_ocr_ms ? ` (首片端到端: ${pkt.ocr.click_to_ocr_ms}ms)` : '';
-      ocrEl.textContent = `${ocrMs} ms${clickOcrTag}`;
-    }
-    if (llmEl) llmEl.textContent = `${llmMs} ms`;
-    if (sliceLabel) sliceLabel.textContent = `${pkt.sliceTag} [${pkt.ocr?.duration_ms || ocrMs}ms]`;
-    if (modelLabel) modelLabel.textContent = `${pkt.llm?.model || '已完成'} [${pkt.llm?.duration_ms || llmMs}ms]`;
-    if (reqEl) {
-      reqEl.textContent = pkt.llm?.user_input || (typeof pkt.requestData === 'string' ? pkt.requestData : JSON.stringify(pkt.requestData, null, 2));
-    }
-    if (resEl) {
-      resEl.textContent = pkt.llm?.raw_response || (typeof pkt.responseData === 'string' ? pkt.responseData : JSON.stringify(pkt.responseData, null, 2));
+    // 3. 更新 Dev HUD 内拦截异常卡片列表
+    const errorListEl = root.querySelector('#hud-error-list');
+    const errorCountEl = root.querySelector('#val-error-count');
+    if (errorListEl) {
+      const errors = (globalThis.ComicErrorTracker?.list ? globalThis.ComicErrorTracker.list() : []);
+      if (errorCountEl) {
+        errorCountEl.textContent = errors.length > 0 ? `${errors.length} 处告警` : '暂无异常';
+        errorCountEl.style.color = errors.length > 0 ? '#ef4444' : '#4ade80';
+      }
+      if (errors.length === 0) {
+        errorListEl.innerHTML = '<div style="color:#94a3b8;font-size:10px;padding:2px 0;">✅ 暂无拦截异常，运行顺畅</div>';
+      } else {
+        errorListEl.innerHTML = errors.slice(0, 3).map(e => `
+          <div class="error-card">
+            <div class="error-card-title">🔴 ${e.type || '异常'} (${e.time || '--'})</div>
+            <div class="error-card-desc">${e.sliceTag || ''} · ${e.detail || ''}</div>
+          </div>
+        `).join('');
+      }
     }
   }
 
@@ -838,7 +706,7 @@
   }
 
   function getCaptureEndpoint() {
-    return 'http://127.0.0.1:8000';
+    return 'http://127.0.0.1:8080';
   }
 
   function getOcrLang() {
@@ -882,12 +750,18 @@
   window.enableComicDebug = enableComicDebug;
   window.disableComicDebug = disableComicDebug;
 
-  // 导出接口供 capture 派发数据
+  // 导出接口供 capture 派发数据与外部调试
   globalThis.ComicDebugHUD = Object.freeze({
     update,
     updatePackets: (pkt) => PacketInspector.record(pkt),
     enable: enableComicDebug,
     disable: disableComicDebug,
+    openOnce,
+    close: () => setVisible(false),
+    toggle: () => setVisible(!isVisible),
+    isVisible: () => isVisible,
+    downloadReport: () => PacketInspector.downloadDiagnosticReport(),
+    getReportText: () => PacketInspector.generatePlainTextReport(),
     isActive,
     isCaptureMode,
     getCaptureEndpoint,

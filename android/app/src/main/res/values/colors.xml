@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="midnight_black">#0B0813</color>
+    <color name="midnight_card">#151026</color>
+    <color name="midnight_card_stroke">#2E224F</color>
+    <color name="midnight_telemetry">#120E22</color>
+    <color name="midnight_terminal">#08060E</color>
+    <color name="midnight_terminal_bar">#100B1E</color>
+
+    <color name="cyber_violet">#8B5CF6</color>
+    <color name="cyber_violet_dark">#7C3AED</color>
+    <color name="cyber_violet_light">#C084FC</color>
+    <color name="cyber_violet_muted">#A78BFA</color>
+    <color name="cyber_violet_bg">#251A45</color>
+
+    <color name="status_green">#10B981</color>
+    <color name="status_green_glow">#4010B981</color>
+    <color name="status_red">#EF4444</color>
+    <color name="status_red_dark">#DC2626</color>
+    <color name="status_amber">#F59E0B</color>
+    <color name="status_blue">#38BDF8</color>
+
+    <color name="text_primary">#F3F4F6</color>
+    <color name="text_secondary">#9CA3AF</color>
+    <color name="text_muted">#6B7280</color>
+    <color name="text_terminal">#34D399</color>
+</resources>
