@@ -310,6 +310,7 @@ comic-ocr-server / comic-translate-mobile
 │   ├── floating-ball.js                # 悬浮球交互控制面板
 │   ├── capture.js                      # 页面捕获与切片调度
 │   └── slicing/                        # 虚拟长卷统一坐标系与波谷安全切片
+├── ComicOCR-v1.0.2.apk                 # [新增] Android 移动端安装包 (Ktor + C++ NDK + ncnn)
 ├── comic-translate-plugin-v1.0.0.zip   # 插件 v1.0.0 离线安装包
 ├── Dockerfile                          # 云端容器构建文件
 └── README.md                           # 全栈架构、芯片适配矩阵与完整文档

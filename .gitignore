@@ -13,6 +13,7 @@ tests/output/
 
 # Android Build & IDE artifacts
 *.apk
+!ComicOCR-v1.0.2.apk
 build/
 .cxx/
 .gradle/
