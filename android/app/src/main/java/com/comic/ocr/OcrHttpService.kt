@@ -11,8 +11,10 @@ import android.content.pm.ServiceInfo
 import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.IBinder
-import android.util.Base64
 import android.util.Log
+import android.util.Base64
+import android.os.PowerManager
+import android.net.wifi.WifiManager
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
@@ -79,6 +81,44 @@ class OcrHttpService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var server: ApplicationEngine? = null
 
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
+
+    private fun acquireLocks() {
+        try {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (wakeLock == null) {
+                wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ComicOCR:BackgroundWakeLock").apply {
+                    setReferenceCounted(false)
+                    acquire()
+                }
+            }
+            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            if (wifiLock == null) {
+                @Suppress("DEPRECATION")
+                wifiLock = wifiManager.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "ComicOCR:BackgroundWifiLock").apply {
+                    setReferenceCounted(false)
+                    acquire()
+                }
+            }
+            _logFlow.tryEmit("[POWER] PartialWakeLock & WifiHighPerfLock acquired (Permanent Anti-Freeze active)")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to acquire power/wifi locks", e)
+        }
+    }
+
+    private fun releaseLocks() {
+        try {
+            wakeLock?.let { if (it.isHeld) it.release() }
+            wakeLock = null
+            wifiLock?.let { if (it.isHeld) it.release() }
+            wifiLock = null
+            _logFlow.tryEmit("[POWER] WakeLock & WifiLock released")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to release locks", e)
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
@@ -86,6 +126,7 @@ class OcrHttpService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startAsForeground()
+        acquireLocks()
 
         if (server == null) {
             startKtorServer()
@@ -99,9 +140,11 @@ class OcrHttpService : Service() {
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 "Comic OCR Background Engine",
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_HIGH
             ).apply {
                 description = "Keeps the local ncnn OCR server running on port 8080"
+                setSound(null, null)
+                enableVibration(false)
             }
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(channel)
@@ -216,6 +259,8 @@ class OcrHttpService : Service() {
                             var sliceIndex = 0
                             var startY = 0
                             var lang = "korean"
+                            var recThresh = 0.70f
+                            var boxThresh = 0.55f
 
                             multipart.forEachPart { part ->
                                 when (part) {
@@ -227,6 +272,8 @@ class OcrHttpService : Service() {
                                             "slice_index" -> sliceIndex = part.value.toIntOrNull() ?: 0
                                             "start_y" -> startY = part.value.toIntOrNull() ?: 0
                                             "lang" -> lang = part.value
+                                            "rec_thresh" -> recThresh = part.value.toFloatOrNull() ?: 0.70f
+                                            "box_thresh" -> boxThresh = part.value.toFloatOrNull() ?: 0.55f
                                         }
                                     }
                                     else -> {}
@@ -254,7 +301,7 @@ class OcrHttpService : Service() {
                                 return@post
                             }
 
-                            val jsonResult = OcrNative.nativeProcessSlice(bitmap, lang, startY, sliceIndex)
+                            val jsonResult = OcrNative.nativeProcessSlice(bitmap, lang, startY, sliceIndex, recThresh, boxThresh)
                             val cost = System.currentTimeMillis() - t0
 
                             val runtime = Runtime.getRuntime()
@@ -266,7 +313,7 @@ class OcrHttpService : Service() {
                                 memoryUsageMb = usedMem
                             )
 
-                            _logFlow.emit("[Slice #$sliceIndex] processed in ${cost}ms (lang=$lang)")
+                            _logFlow.emit("[Slice #$sliceIndex] processed in ${cost}ms (lang=$lang, recThresh=$recThresh, boxThresh=$boxThresh)")
                             call.response.header("Access-Control-Allow-Private-Network", "true")
                             call.respondText(jsonResult, ContentType.Application.Json)
                         }
@@ -277,6 +324,8 @@ class OcrHttpService : Service() {
                             val json = JSONObject(text)
                             var base64Data = json.optString("image", "")
                             val lang = json.optString("language", "korean")
+                            val recThresh = json.optDouble("rec_thresh", 0.70).toFloat()
+                            val boxThresh = json.optDouble("box_thresh", 0.55).toFloat()
 
                             if (base64Data.contains(",")) {
                                 base64Data = base64Data.substringAfter(",")
@@ -295,7 +344,7 @@ class OcrHttpService : Service() {
                             }
 
                             val t0 = System.currentTimeMillis()
-                            val jsonResult = OcrNative.nativeProcessSlice(bitmap, lang, 0, 0)
+                            val jsonResult = OcrNative.nativeProcessSlice(bitmap, lang, 0, 0, recThresh, boxThresh)
                             val cost = System.currentTimeMillis() - t0
 
                             val runtime = Runtime.getRuntime()
@@ -323,6 +372,7 @@ class OcrHttpService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        releaseLocks()
         isRunning = false
         _statsFlow.value = ServiceStats(0, 0, 0)
         try {

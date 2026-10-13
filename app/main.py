@@ -74,7 +74,9 @@ async def process_slice_endpoint(
     slice_index: int = Form(..., description="切片序号 (0, 1, 2...)"),
     start_y: int = Form(0, description="切片在整话总画布上的起始绝对 Y 像素坐标"),
     end_y: Optional[int] = Form(None, description="切片在整话总画布上的结束绝对 Y 像素坐标 (可选)"),
-    lang: str = Form("kr", description="目标识别语种 (kr, en, jp, ru, zh)")
+    lang: str = Form("kr", description="目标识别语种 (kr, en, jp, ru, zh)"),
+    rec_thresh: float = Form(0.70, description="文本行识别置信度门槛 (默认 0.70，敏锐模式 0.50)"),
+    box_thresh: float = Form(0.55, description="DBNet 候选框分割阈值 (默认 0.55，敏锐模式 0.45)")
 ):
     t_start = time.perf_counter()
 
@@ -99,7 +101,9 @@ async def process_slice_endpoint(
         bubbles = engine_manager.process_slice(
             image=image,
             lang=lang,
-            start_y=start_y
+            start_y=start_y,
+            rec_thresh=rec_thresh,
+            box_thresh=box_thresh
         )
 
         cost_ms = (time.perf_counter() - t_start) * 1000.0

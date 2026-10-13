@@ -758,6 +758,66 @@
           cursor: pointer;
         }
         .btn-foot-ok:hover { background: #0ea5e9; }
+
+        /* OCR 识别模式与高级设置样式 */
+        .ocr-modes-grid {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 6px;
+        }
+        .ocr-mode-btn {
+          background: rgba(255, 255, 255, 0.03);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          border-radius: 8px;
+          padding: 8px 6px;
+          text-align: left;
+          cursor: pointer;
+          transition: all 0.15s ease;
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+        .ocr-mode-btn:hover {
+          border-color: rgba(46, 213, 115, 0.4);
+          background: rgba(46, 213, 115, 0.05);
+        }
+        .ocr-mode-btn.active {
+          border-color: #2ed573;
+          background: rgba(46, 213, 115, 0.12);
+          box-shadow: 0 0 10px rgba(46, 213, 115, 0.2);
+        }
+        .ocr-mode-btn.active.mode-balanced {
+          border-color: #f59e0b;
+          background: rgba(245, 158, 11, 0.12);
+          box-shadow: 0 0 10px rgba(245, 158, 11, 0.2);
+        }
+        .ocr-mode-btn.active.mode-strict {
+          border-color: #f43f5e;
+          background: rgba(244, 63, 94, 0.12);
+          box-shadow: 0 0 10px rgba(244, 63, 94, 0.2);
+        }
+        .ocr-slider-drawer {
+          overflow: hidden;
+          transition: max-height 0.25s ease;
+        }
+        .ocr-slider-drawer.collapsed {
+          max-height: 0;
+          display: none;
+        }
+        .ocr-slider-drawer:not(.collapsed) {
+          max-height: 250px;
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+        }
+        .slider-ctrl {
+          width: 100%;
+          height: 6px;
+          border-radius: 4px;
+          background: #334155;
+          accent-color: #2ed573;
+          cursor: pointer;
+        }
       </style>
 
       <!-- 悬浮球本体 -->
@@ -857,36 +917,153 @@
               <div id="modal-providers-container" style="display:flex; flex-direction:column; gap:10px;"></div>
             </div>
 
-            <!-- Tab: OCR 服务设置 -->
+            <!-- Tab: OCR 服务与灵敏度设置 -->
             <div id="tab-pane-ocr" style="display:none; flex-direction:column; gap:12px;">
-              <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); padding:10px; border-radius:10px; color:#94a3b8; font-size:11px; line-height:1.5;">
-                ⚡ <strong>OCR 推理引擎与加速路由</strong>：一加 13 骁龙 8 Elite 推荐使用【手机端本地加速】，低配手机或远程服务可切换【云端 Serverless】。
-              </div>
+              <!-- 模块 A: 识别灵敏度与召回模式 -->
+              <div class="provider-card" style="border:1px solid rgba(255,255,255,0.1); background:#14171f;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                  <span class="form-label" style="margin-bottom:0; font-size:12px; font-weight:700; color:#f8fafc;">
+                    🎯 识别灵敏度与对白召回
+                  </span>
+                  <span id="ocr-comic-anchor-tag" style="font-size:10px; color:#38bdf8; background:rgba(56,189,248,0.1); padding:2px 6px; border-radius:4px; border:1px solid rgba(56,189,248,0.25);">
+                    📖 当前漫画专属记忆
+                  </span>
+                </div>
 
-              <div class="provider-card">
-                <span class="form-label">运行模式偏好</span>
-                <div style="display:flex; flex-direction:column; gap:8px; margin-top:6px;">
-                  <label style="display:flex; align-items:center; gap:8px; font-size:12px; color:#f8fafc; cursor:pointer;">
-                    <input type="radio" name="modal-ocr-mode" value="local" id="radio-mode-local" style="accent-color:#2ed573;" checked>
-                    <span>📱 <strong>手机端本地硬件加速</strong> (推荐·一加 13 专享)</span>
-                  </label>
-                  <label style="display:flex; align-items:center; gap:8px; font-size:12px; color:#f8fafc; cursor:pointer;">
-                    <input type="radio" name="modal-ocr-mode" value="cloud" id="radio-mode-cloud" style="accent-color:#2ed573;">
-                    <span>☁️ <strong>云端 Serverless / 自建服务器</strong> (低配机备用)</span>
-                  </label>
+                <!-- 三大模式网格 -->
+                <div class="ocr-modes-grid">
+                  <!-- 1. 敏锐 -->
+                  <div class="ocr-mode-btn" id="btn-ocr-sensitive" data-mode="sensitive">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                      <span style="font-size:11px; font-weight:700; color:#2ed573;">🟢 敏锐模式</span>
+                      <span style="font-family:monospace; font-size:10px; color:#2ed573; font-weight:700;">0.50</span>
+                    </div>
+                    <div style="font-size:10px; color:#94a3b8; margin-top:2px;">防漏对白 / 高召回</div>
+                    <div style="font-size:9px; color:#6ee7b7; margin-top:2px;">手写涂鸦/暗底字</div>
+                  </div>
+
+                  <!-- 2. 标准平衡 -->
+                  <div class="ocr-mode-btn" id="btn-ocr-balanced" data-mode="balanced">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                      <span style="font-size:11px; font-weight:700; color:#fbbf24;">🟡 标准平衡</span>
+                      <span style="font-family:monospace; font-size:10px; color:#fbbf24; font-weight:700;">0.70</span>
+                    </div>
+                    <div style="font-size:10px; color:#94a3b8; margin-top:2px;">默认推荐 / 均衡</div>
+                    <div style="font-size:9px; color:#94a3b8; margin-top:2px;">常规白底黑字</div>
+                  </div>
+
+                  <!-- 3. 纯净 -->
+                  <div class="ocr-mode-btn" id="btn-ocr-strict" data-mode="strict">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                      <span style="font-size:11px; font-weight:700; color:#f87171;">🔴 纯净模式</span>
+                      <span style="font-family:monospace; font-size:10px; color:#f87171; font-weight:700;">0.82</span>
+                    </div>
+                    <div style="font-size:10px; color:#94a3b8; margin-top:2px;">抗网点 / 拒水印</div>
+                    <div style="font-size:9px; color:#94a3b8; margin-top:2px;">仅留高置信气泡</div>
+                  </div>
+                </div>
+
+                <!-- 模式解读说明卡片 -->
+                <div id="ocr-desc-card" style="margin-top:8px; padding:8px 10px; border-radius:8px; background:rgba(46,213,115,0.08); border:1px solid rgba(46,213,115,0.25); font-size:11px; line-height:1.45; color:#cbd5e1;">
+                  <strong style="color:#2ed573;">🟢 敏锐模式生效中</strong>：识别置信度底线放宽至 <span style="font-family:monospace; font-weight:700; color:#86efac;">0.50</span>，候选框门槛 <span style="font-family:monospace; font-weight:700; color:#86efac;">0.45</span>。手写字、暗底对白和拟声小字全部捕获！
+                </div>
+
+                <!-- 自定义高级微调折叠抽屉 -->
+                <div style="margin-top:10px; border-top:1px solid rgba(255,255,255,0.08); padding-top:8px;">
+                  <div id="btn-toggle-custom-drawer" style="display:flex; justify-content:space-between; align-items:center; cursor:pointer;">
+                    <div style="display:flex; align-items:center; gap:6px; font-size:11px; font-weight:600; color:#cbd5e1;">
+                      <span>⚙️ 自定义参数微调 (拖动滑块)</span>
+                      <span id="ocr-custom-badge" style="display:none; font-size:9px; background:rgba(46,213,115,0.2); color:#86efac; border:1px solid rgba(46,213,115,0.3); padding:1px 5px; border-radius:4px; font-family:monospace;">自定义中</span>
+                    </div>
+                    <span id="ocr-custom-arrow" style="font-size:10px; color:#64748b; transition:transform 0.2s;">▼ 展开</span>
+                  </div>
+
+                  <div id="ocr-custom-drawer" class="ocr-slider-drawer collapsed" style="margin-top:8px; border-top:1px dashed rgba(255,255,255,0.08); padding-top:8px;">
+                    <!-- 滑块 1: rec_score -->
+                    <div>
+                      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                        <span style="font-size:11px; color:#cbd5e1;">文本识别置信度底线 (rec_thresh) <strong style="color:#f43f5e; font-size:10px;">*核心</strong></span>
+                        <span id="label-rec-thresh-val" style="font-family:monospace; font-size:11px; font-weight:700; color:#2ed573; background:#1e293b; padding:2px 6px; border-radius:4px; border:1px solid #334155;">0.50</span>
+                      </div>
+                      <input type="range" id="slider-rec-thresh" min="0.30" max="0.90" step="0.05" value="0.50" class="slider-ctrl">
+                      <div style="display:flex; justify-content:space-between; font-size:9px; color:#64748b; font-family:monospace; margin-top:2px;">
+                        <span>0.30 (极激进)</span>
+                        <span>0.50 (敏锐)</span>
+                        <span>0.70 (标准)</span>
+                        <span>0.90 (极严格)</span>
+                      </div>
+                    </div>
+
+                    <!-- 滑块 2: box_thresh -->
+                    <div>
+                      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                        <span style="font-size:11px; color:#cbd5e1;">文本框检测门槛 (box_thresh)</span>
+                        <span id="label-box-thresh-val" style="font-family:monospace; font-size:11px; font-weight:700; color:#2ed573; background:#1e293b; padding:2px 6px; border-radius:4px; border:1px solid #334155;">0.45</span>
+                      </div>
+                      <input type="range" id="slider-box-thresh" min="0.30" max="0.80" step="0.05" value="0.45" class="slider-ctrl">
+                      <div style="display:flex; justify-content:space-between; font-size:9px; color:#64748b; font-family:monospace; margin-top:2px;">
+                        <span>0.30 (多框防漏)</span>
+                        <span>0.55 (平衡)</span>
+                        <span>0.80 (少框保真)</span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              <div class="provider-card" id="ocr-card-local" style="border-left:3px solid #2ed573;">
-                <span class="form-label" style="color:#2ed573;">本地端点 (已固化免配置)</span>
-                <input type="text" value="http://127.0.0.1:8080" class="input-text" readonly style="font-family:monospace; font-size:11px; background:rgba(255,255,255,0.05); color:#94a3b8; cursor:not-allowed;">
-                <div style="font-size:10px; color:#64748b; margin-top:4px;">✨ 自动经由插件后台 Service Worker 特权管道代发，100% 免疫网页 HTTPS Mixed Content 限制，纯单机零延迟。</div>
-              </div>
+              <!-- 模块 B: 推理引擎与服务路由 -->
+              <div class="provider-card" style="border:1px solid rgba(255,255,255,0.1); background:#14171f;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                  <span class="form-label" style="margin-bottom:0; font-size:12px; font-weight:700; color:#f8fafc;">
+                    ⚡ 推理引擎与服务路由
+                  </span>
+                  <span style="font-size:10px; color:#94a3b8;">支持自定义端点 IP</span>
+                </div>
 
-              <div class="provider-card" id="ocr-card-cloud" style="display:none; border-left:3px solid #38bdf8;">
-                <span class="form-label" style="color:#38bdf8;">云端 OCR 接口地址</span>
-                <input type="text" id="modal-ocr-cloud-url" class="input-text" placeholder="https://your-serverless-api.com" style="font-family:monospace; font-size:11px;">
-                <div style="font-size:10px; color:#64748b; margin-top:4px;">支持阿里云 FC、腾讯云 SCF 或任意兼容接口规范的公网 HTTPS OCR 服务。</div>
+                <div style="display:flex; flex-direction:column; gap:10px;">
+                  <!-- 路由 1: 本地硬件加速 -->
+                  <div id="ocr-route-card-local" style="padding:10px; border-radius:8px; background:rgba(46,213,115,0.05); border:1px solid rgba(46,213,115,0.3); display:flex; flex-direction:column; gap:6px;">
+                    <label style="display:flex; justify-content:space-between; align-items:center; cursor:pointer;">
+                      <div style="display:flex; align-items:center; gap:8px;">
+                        <input type="radio" name="modal-ocr-mode" value="local" id="radio-mode-local" style="accent-color:#2ed573;" checked>
+                        <span style="font-size:12px; font-weight:700; color:#2ed573;">📱 手机端本地硬件加速 (推荐·端侧硬件推理)</span>
+                      </div>
+                      <span style="font-size:10px; color:#2ed573; background:rgba(46,213,115,0.15); padding:1px 6px; border-radius:4px; font-family:monospace;">免流零延迟</span>
+                    </label>
+
+                    <div style="padding-top:4px;">
+                      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                        <span style="font-size:10px; color:#94a3b8;">本地服务端点 (允许编辑 IP，支持同局域网设备)</span>
+                        <button id="btn-reset-local-url" type="button" style="font-size:10px; color:#2ed573; background:none; border:none; cursor:pointer; text-decoration:underline; padding:0;">重置为 127.0.0.1</button>
+                      </div>
+                      <input type="text" id="modal-ocr-local-url" value="http://127.0.0.1:8080" class="input-text" style="font-family:monospace; font-size:11px; padding:6px 8px;">
+                      <div style="font-size:10px; color:#64748b; margin-top:4px;">
+                        ✨ 经由插件后台 Service Worker 特权管道直连，100% 免疫网页 HTTPS 混合内容拦截。
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- 路由 2: 云端 Serverless / 自建服务器 -->
+                  <div id="ocr-route-card-cloud" style="padding:10px; border-radius:8px; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.08); display:flex; flex-direction:column; gap:6px;">
+                    <label style="display:flex; justify-content:space-between; align-items:center; cursor:pointer;">
+                      <div style="display:flex; align-items:center; gap:8px;">
+                        <input type="radio" name="modal-ocr-mode" value="cloud" id="radio-mode-cloud" style="accent-color:#2ed573;">
+                        <span style="font-size:12px; font-weight:700; color:#cbd5e1;">☁️ 云端 Serverless / 自建 Docker 服务</span>
+                      </div>
+                      <span style="font-size:10px; color:#64748b; font-family:monospace;">远程备用</span>
+                    </label>
+
+                    <div style="padding-top:4px;">
+                      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                        <span style="font-size:10px; color:#94a3b8;">云端 / 自建服务器 API 地址</span>
+                      </div>
+                      <input type="text" id="modal-ocr-cloud-url" placeholder="https://your-ocr-server.com" class="input-text" style="font-family:monospace; font-size:11px; padding:6px 8px;">
+                      <div style="font-size:10px; color:#64748b; margin-top:4px;">
+                        支持阿里云 ACR 预构建镜像一键部署、Serverless 函数计算等标准 HTTP OCR 服务。
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -1446,6 +1623,296 @@
     showToast(`已将 "${val}" 加入全局水印黑名单`);
   }
 
+  // ==========================================
+  // OCR 识别模式与路由端点控制逻辑
+  // ==========================================
+  const OCR_PRESETS = {
+    sensitive: {
+      mode: 'sensitive',
+      recThresh: 0.50,
+      boxThresh: 0.45,
+      desc: '<strong style="color:#2ed573;">🟢 敏锐模式生效中</strong>：识别置信度底线放宽至 <span style="font-family:monospace; font-weight:700; color:#86efac;">0.50</span>，候选框门槛 <span style="font-family:monospace; font-weight:700; color:#86efac;">0.45</span>。手写字、暗底对白和拟声小字全部捕获！'
+    },
+    balanced: {
+      mode: 'balanced',
+      recThresh: 0.70,
+      boxThresh: 0.55,
+      desc: '<strong style="color:#fbbf24;">🟡 标准平衡生效中</strong>：识别置信度门槛 <span style="font-family:monospace; font-weight:700; color:#fde68a;">0.70</span>，候选框门槛 <span style="font-family:monospace; font-weight:700; color:#fde68a;">0.55</span>。推荐常规黑白/彩色漫使用，兼顾速度与准确度。'
+    },
+    strict: {
+      mode: 'strict',
+      recThresh: 0.82,
+      boxThresh: 0.65,
+      desc: '<strong style="color:#f87171;">🔴 纯净模式生效中</strong>：识别置信度底线提升至 <span style="font-family:monospace; font-weight:700; color:#fca5a5;">0.82</span>，候选框门槛 <span style="font-family:monospace; font-weight:700; color:#fca5a5;">0.65</span>。强力过滤网点噪点与隐形水印，仅保留高置信对白气泡。'
+    }
+  };
+
+  function updateOcrRouteCards(isLocal) {
+    const cardLocal = shadow.getElementById('ocr-route-card-local');
+    const cardCloud = shadow.getElementById('ocr-route-card-cloud');
+    if (cardLocal) {
+      cardLocal.style.background = isLocal ? 'rgba(46, 213, 115, 0.05)' : 'rgba(255, 255, 255, 0.02)';
+      cardLocal.style.borderColor = isLocal ? 'rgba(46, 213, 115, 0.3)' : 'rgba(255, 255, 255, 0.08)';
+    }
+    if (cardCloud) {
+      cardCloud.style.background = isLocal ? 'rgba(255, 255, 255, 0.02)' : 'rgba(56, 189, 248, 0.08)';
+      cardCloud.style.borderColor = isLocal ? 'rgba(255, 255, 255, 0.08)' : 'rgba(56, 189, 248, 0.35)';
+    }
+  }
+
+  function applyOcrPreset(mode, notify = false) {
+    const preset = OCR_PRESETS[mode];
+    if (!preset) return;
+
+    ['sensitive', 'balanced', 'strict'].forEach(m => {
+      const btn = shadow.getElementById(`btn-ocr-${m}`);
+      if (btn) {
+        if (m === mode) {
+          btn.classList.add('active');
+          if (m === 'balanced') btn.classList.add('mode-balanced');
+          if (m === 'strict') btn.classList.add('mode-strict');
+        } else {
+          btn.classList.remove('active', 'mode-balanced', 'mode-strict');
+        }
+      }
+    });
+
+    const badge = shadow.getElementById('ocr-custom-badge');
+    if (badge) badge.style.display = 'none';
+
+    const sRec = shadow.getElementById('slider-rec-thresh');
+    const sBox = shadow.getElementById('slider-box-thresh');
+    const lRec = shadow.getElementById('label-rec-thresh-val');
+    const lBox = shadow.getElementById('label-box-thresh-val');
+    if (sRec) sRec.value = preset.recThresh;
+    if (sBox) sBox.value = preset.boxThresh;
+    if (lRec) lRec.textContent = preset.recThresh.toFixed(2);
+    if (lBox) lBox.textContent = preset.boxThresh.toFixed(2);
+
+    const descCard = shadow.getElementById('ocr-desc-card');
+    if (descCard) descCard.innerHTML = preset.desc;
+
+    if (globalThis.ComicConfigStore?.saveOcrSensitivity) {
+      void ComicConfigStore.saveOcrSensitivity(location.href, {
+        mode: preset.mode,
+        recThresh: preset.recThresh,
+        boxThresh: preset.boxThresh
+      }, true);
+    }
+    try {
+      localStorage.setItem('comic_ocr_rec_score', String(preset.recThresh));
+      localStorage.setItem('comic_ocr_det_box_thresh', String(preset.boxThresh));
+    } catch {}
+
+    if (notify) {
+      const names = { sensitive: '🟢 敏锐模式 (0.50)', balanced: '🟡 标准平衡 (0.70)', strict: '🔴 纯净模式 (0.82)' };
+      showToast(`🎯 OCR 已切换为【${names[mode]}】并已保存`);
+    }
+  }
+
+  function applyCustomOcrSliders(notify = false) {
+    const sRec = shadow.getElementById('slider-rec-thresh');
+    const sBox = shadow.getElementById('slider-box-thresh');
+    const lRec = shadow.getElementById('label-rec-thresh-val');
+    const lBox = shadow.getElementById('label-box-thresh-val');
+    if (!sRec || !sBox) return;
+
+    const recVal = parseFloat(sRec.value) || 0.50;
+    const boxVal = parseFloat(sBox.value) || 0.45;
+
+    if (lRec) lRec.textContent = recVal.toFixed(2);
+    if (lBox) lBox.textContent = boxVal.toFixed(2);
+
+    ['sensitive', 'balanced', 'strict'].forEach(m => {
+      const btn = shadow.getElementById(`btn-ocr-${m}`);
+      if (btn) btn.classList.remove('active', 'mode-balanced', 'mode-strict');
+    });
+
+    const badge = shadow.getElementById('ocr-custom-badge');
+    if (badge) badge.style.display = 'inline-block';
+
+    const descCard = shadow.getElementById('ocr-desc-card');
+    if (descCard) {
+      descCard.innerHTML = `<strong style="color:#38bdf8;">⚙️ 自定义参数生效中</strong>：识别置信度底线 <span style="font-family:monospace; font-weight:700; color:#7dd3fc;">${recVal.toFixed(2)}</span>，候选框门槛 <span style="font-family:monospace; font-weight:700; color:#7dd3fc;">${boxVal.toFixed(2)}</span>。`;
+    }
+
+    if (globalThis.ComicConfigStore?.saveOcrSensitivity) {
+      void ComicConfigStore.saveOcrSensitivity(location.href, {
+        mode: 'custom',
+        recThresh: recVal,
+        boxThresh: boxVal
+      }, true);
+    }
+    try {
+      localStorage.setItem('comic_ocr_rec_score', String(recVal));
+      localStorage.setItem('comic_ocr_det_box_thresh', String(boxVal));
+    } catch {}
+
+    if (notify) {
+      showToast(`⚙️ OCR 阈值已更新：置信度 ${recVal.toFixed(2)} / 检测框 ${boxVal.toFixed(2)}`);
+    }
+  }
+
+  function setupOcrTabInteractions() {
+    ['sensitive', 'balanced', 'strict'].forEach(m => {
+      const btn = shadow.getElementById(`btn-ocr-${m}`);
+      if (btn) {
+        btn.addEventListener('click', () => applyOcrPreset(m, true));
+      }
+    });
+
+    const btnToggleDrawer = shadow.getElementById('btn-toggle-custom-drawer');
+    const drawer = shadow.getElementById('ocr-custom-drawer');
+    const arrow = shadow.getElementById('ocr-custom-arrow');
+    if (btnToggleDrawer && drawer) {
+      btnToggleDrawer.addEventListener('click', () => {
+        const isCollapsed = drawer.classList.contains('collapsed');
+        if (isCollapsed) {
+          drawer.classList.remove('collapsed');
+          if (arrow) arrow.textContent = '▲ 收起';
+        } else {
+          drawer.classList.add('collapsed');
+          if (arrow) arrow.textContent = '▼ 展开';
+        }
+      });
+    }
+
+    const sRec = shadow.getElementById('slider-rec-thresh');
+    const sBox = shadow.getElementById('slider-box-thresh');
+    if (sRec) {
+      sRec.addEventListener('input', () => applyCustomOcrSliders(false));
+      sRec.addEventListener('change', () => applyCustomOcrSliders(true));
+    }
+    if (sBox) {
+      sBox.addEventListener('input', () => applyCustomOcrSliders(false));
+      sBox.addEventListener('change', () => applyCustomOcrSliders(true));
+    }
+
+    const radLocal = shadow.getElementById('radio-mode-local');
+    const radCloud = shadow.getElementById('radio-mode-cloud');
+    if (radLocal && radCloud) {
+      radLocal.addEventListener('change', () => {
+        updateOcrRouteCards(true);
+        if (globalThis.ComicConfigStore?.setUseLocalBackend) {
+          void ComicConfigStore.setUseLocalBackend(true);
+        }
+        showToast('📱 已切换为手机端本地硬件加速');
+      });
+      radCloud.addEventListener('change', () => {
+        updateOcrRouteCards(false);
+        if (globalThis.ComicConfigStore?.setUseLocalBackend) {
+          void ComicConfigStore.setUseLocalBackend(false);
+        }
+        showToast('☁️ 已切换为云端 Serverless / 自建 Docker 服务');
+      });
+    }
+
+    const btnResetLocal = shadow.getElementById('btn-reset-local-url');
+    const inputLocalUrl = shadow.getElementById('modal-ocr-local-url');
+    if (btnResetLocal && inputLocalUrl) {
+      btnResetLocal.addEventListener('click', () => {
+        inputLocalUrl.value = 'http://127.0.0.1:8080';
+        if (globalThis.ComicConfigStore?.setLocalApiUrl) {
+          void ComicConfigStore.setLocalApiUrl('http://127.0.0.1:8080');
+        }
+        try {
+          localStorage.setItem('comic_local_api_url', 'http://127.0.0.1:8080');
+        } catch {}
+        showToast('🔄 本地端点已重置为 127.0.0.1:8080');
+      });
+    }
+
+    if (inputLocalUrl) {
+      inputLocalUrl.addEventListener('change', () => {
+        const val = inputLocalUrl.value.trim() || 'http://127.0.0.1:8080';
+        if (globalThis.ComicConfigStore?.setLocalApiUrl) {
+          void ComicConfigStore.setLocalApiUrl(val);
+        }
+        try { localStorage.setItem('comic_local_api_url', val); } catch {}
+      });
+    }
+    const inputCloudUrl = shadow.getElementById('modal-ocr-cloud-url');
+    if (inputCloudUrl) {
+      inputCloudUrl.addEventListener('change', () => {
+        const val = inputCloudUrl.value.trim();
+        if (globalThis.ComicConfigStore?.setCloudApiUrl) {
+          void ComicConfigStore.setCloudApiUrl(val);
+        }
+        try { localStorage.setItem('comic_cloud_api_url', val); } catch {}
+      });
+    }
+  }
+
+  function loadOcrTabState() {
+    try {
+      const sens = globalThis.ComicConfigStore?.getOcrSensitivity ?
+                   ComicConfigStore.getOcrSensitivity(location.href) :
+                   { mode: 'sensitive', recThresh: 0.50, boxThresh: 0.45, isBound: false };
+
+      const anchorTag = shadow.getElementById('ocr-comic-anchor-tag');
+      if (anchorTag) {
+        if (sens.isBound) {
+          anchorTag.textContent = '📖 当前漫画专属记忆 (已生效)';
+          anchorTag.style.color = '#2ed573';
+        } else {
+          anchorTag.textContent = '📖 当前漫画专属记忆';
+          anchorTag.style.color = '#38bdf8';
+        }
+      }
+
+      if (sens.mode === 'sensitive' || sens.mode === 'balanced' || sens.mode === 'strict') {
+        applyOcrPreset(sens.mode, false);
+      } else {
+        const sRec = shadow.getElementById('slider-rec-thresh');
+        const sBox = shadow.getElementById('slider-box-thresh');
+        const lRec = shadow.getElementById('label-rec-thresh-val');
+        const lBox = shadow.getElementById('label-box-thresh-val');
+        const badge = shadow.getElementById('ocr-custom-badge');
+        const descCard = shadow.getElementById('ocr-desc-card');
+        const drawer = shadow.getElementById('ocr-custom-drawer');
+        const arrow = shadow.getElementById('ocr-custom-arrow');
+
+        ['sensitive', 'balanced', 'strict'].forEach(m => {
+          shadow.getElementById(`btn-ocr-${m}`)?.classList.remove('active', 'mode-balanced', 'mode-strict');
+        });
+
+        const rVal = sens.recThresh ?? 0.50;
+        const bVal = sens.boxThresh ?? 0.45;
+        if (sRec) sRec.value = rVal;
+        if (sBox) sBox.value = bVal;
+        if (lRec) lRec.textContent = Number(rVal).toFixed(2);
+        if (lBox) lBox.textContent = Number(bVal).toFixed(2);
+        if (badge) badge.style.display = 'inline-block';
+        if (drawer) drawer.classList.remove('collapsed');
+        if (arrow) arrow.textContent = '▲ 收起';
+        if (descCard) {
+          descCard.innerHTML = `<strong style="color:#38bdf8;">⚙️ 自定义参数生效中</strong>：识别置信度底线 <span style="font-family:monospace; font-weight:700; color:#7dd3fc;">${Number(rVal).toFixed(2)}</span>，候选框门槛 <span style="font-family:monospace; font-weight:700; color:#7dd3fc;">${Number(bVal).toFixed(2)}</span>。`;
+        }
+      }
+
+      const isLocal = globalThis.ComicConfigStore?.getUseLocalBackend ?
+                      ComicConfigStore.getUseLocalBackend() :
+                      (localStorage.getItem('comic_dev_enable_capture') !== '0');
+      const localUrl = (globalThis.ComicConfigStore?.getLocalApiUrl ? ComicConfigStore.getLocalApiUrl() : null) ||
+                       localStorage.getItem('comic_local_api_url') || 'http://127.0.0.1:8080';
+      const cloudUrl = (globalThis.ComicConfigStore?.getCloudApiUrl ? ComicConfigStore.getCloudApiUrl() : null) ||
+                       localStorage.getItem('comic_cloud_api_url') || '';
+
+      const inputLocal = shadow.getElementById('modal-ocr-local-url');
+      const inputCloud = shadow.getElementById('modal-ocr-cloud-url');
+      if (inputLocal) inputLocal.value = localUrl;
+      if (inputCloud) inputCloud.value = cloudUrl;
+
+      const radLocal = shadow.getElementById('radio-mode-local');
+      const radCloud = shadow.getElementById('radio-mode-cloud');
+      if (radLocal) radLocal.checked = isLocal;
+      if (radCloud) radCloud.checked = !isLocal;
+      updateOcrRouteCards(isLocal);
+    } catch (e) {
+      console.warn('[FloatingBall] loadOcrTabState 异常:', e);
+    }
+  }
+
   function setupModalInteractions() {
     modalOverlay.addEventListener('click', (e) => {
       if (e.target === modalOverlay) closeModal();
@@ -1455,6 +1922,9 @@
       saveModalData();
       closeModal();
     });
+
+    // 绑定 OCR 服务与灵敏度事件
+    setupOcrTabInteractions();
 
     // 选项卡切换
     const tabBtns = shadow.querySelectorAll('.modal-tab-btn');
@@ -1835,34 +2305,8 @@
     // 语料库与世界观加载
     loadCorpusTab();
 
-    // 加载云端 OCR 地址与模式
-    try {
-      const isLocal = globalThis.ComicConfigStore?.getUseLocalBackend ?
-                      ComicConfigStore.getUseLocalBackend() :
-                      (localStorage.getItem('comic_dev_enable_capture') !== '0');
-      const cloudUrl = (globalThis.ComicConfigStore?.getCloudApiUrl ? ComicConfigStore.getCloudApiUrl() : null) ||
-                       localStorage.getItem('comic_cloud_api_url') || '';
-      const ocrInput = shadow.getElementById('modal-ocr-cloud-url');
-      if (ocrInput) ocrInput.value = cloudUrl;
-
-      const radLocal = shadow.getElementById('radio-mode-local');
-      const radCloud = shadow.getElementById('radio-mode-cloud');
-      const cardLocal = shadow.getElementById('ocr-card-local');
-      const cardCloud = shadow.getElementById('ocr-card-cloud');
-
-      function updateOcrCards(local) {
-        if (cardLocal) cardLocal.style.display = local ? 'block' : 'none';
-        if (cardCloud) cardCloud.style.display = local ? 'none' : 'block';
-      }
-
-      if (radLocal && radCloud) {
-        radLocal.checked = isLocal;
-        radCloud.checked = !isLocal;
-        radLocal.onchange = () => updateOcrCards(true);
-        radCloud.onchange = () => updateOcrCards(false);
-      }
-      updateOcrCards(isLocal);
-    } catch {}
+    // OCR 灵敏度与服务路由状态加载
+    loadOcrTabState();
 
     // 加载调试与优化状态
     try {
@@ -1924,6 +2368,18 @@
     const profileName = (shadow.getElementById('modal-profile-name')?.value || '').trim() || currentProfileName || '默认档案';
     const worldview = shadow.getElementById('modal-worldview-input')?.value?.trim() || '';
 
+    const localUrl = shadow.getElementById('modal-ocr-local-url')?.value?.trim() || 'http://127.0.0.1:8080';
+    const cloudUrl = shadow.getElementById('modal-ocr-cloud-url')?.value?.trim() || '';
+    const isLocal = Boolean(shadow.getElementById('radio-mode-local')?.checked);
+
+    const recVal = parseFloat(shadow.getElementById('slider-rec-thresh')?.value) || 0.50;
+    const boxVal = parseFloat(shadow.getElementById('slider-box-thresh')?.value) || 0.45;
+
+    let currentMode = 'custom';
+    if (shadow.getElementById('btn-ocr-sensitive')?.classList.contains('active')) currentMode = 'sensitive';
+    else if (shadow.getElementById('btn-ocr-balanced')?.classList.contains('active')) currentMode = 'balanced';
+    else if (shadow.getElementById('btn-ocr-strict')?.classList.contains('active')) currentMode = 'strict';
+
     if (globalThis.ComicConfigStore) {
       // 1. 保存漫画档案数据
       void ComicConfigStore.saveProfile(profileName, {
@@ -1933,24 +2389,27 @@
       // 2. 绑定当前网址与该档案
       void ComicConfigStore.bindSiteToProfile(location.href, profileName);
 
-      // 3. 保存云端 OCR 与模式
-      const cloudUrl = shadow.getElementById('modal-ocr-cloud-url')?.value?.trim() || '';
+      // 3. 保存本地与云端 OCR 地址与模式
+      void ComicConfigStore.setLocalApiUrl(localUrl);
       void ComicConfigStore.setCloudApiUrl(cloudUrl);
-      const isLocal = Boolean(shadow.getElementById('radio-mode-local')?.checked);
       void ComicConfigStore.setUseLocalBackend(isLocal);
+
+      // 4. 保存 OCR 灵敏度与阈值
+      void ComicConfigStore.saveOcrSensitivity(location.href, {
+        mode: currentMode,
+        recThresh: recVal,
+        boxThresh: boxVal
+      }, true);
     }
 
     // 兼容遗留 localStorage
     try {
-      const cloudUrl = shadow.getElementById('modal-ocr-cloud-url')?.value?.trim() || '';
+      localStorage.setItem('comic_local_api_url', localUrl);
       localStorage.setItem('comic_cloud_api_url', cloudUrl);
-      const isLocal = shadow.getElementById('radio-mode-local')?.checked;
       localStorage.setItem('comic_dev_enable_capture', isLocal ? '1' : '0');
 
-      // 固化核心运行参数 (官方最佳实践: 1024 识别精度，6 槽位并发)
-      localStorage.setItem('comic_ocr_det_thresh', '0.30');
-      localStorage.setItem('comic_ocr_det_box_thresh', '0.50');
-      localStorage.setItem('comic_ocr_rec_score', '0.70');
+      localStorage.setItem('comic_ocr_det_box_thresh', String(boxVal));
+      localStorage.setItem('comic_ocr_rec_score', String(recVal));
       localStorage.setItem('comic_slice_concurrency', '6');
     } catch {}
 

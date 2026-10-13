@@ -13,7 +13,9 @@ tests/output/
 
 # Android Build & IDE artifacts
 *.apk
-!ComicOCR-v1.0.2.apk
+!ComicOCR-v1.0.3.apk
+*.idsig
+tools/
 build/
 .cxx/
 .gradle/
@@ -30,4 +32,4 @@ plugin/_metadata/
 scratch/
 WSL_HANDOVER.md
 *.zip
-!comic-translate-plugin-v1.0.0.zip
+!comic-translate-plugin-v1.0.1.zip

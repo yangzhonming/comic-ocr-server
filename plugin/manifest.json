@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "ComicTranslate 漫画切片与智能汉化插件",
-  "version": "1.0.0",
-  "description": "长漫阅读器汉化插件：支持气泡紧致防溢出贴合、彻底消除补丁纵向超长、多通道物理材质分流、闭包Shadow DOM全方位护眼；新增设置页【调试与优化】面板、单次Dev看板、切线辅助线开关与双击全量导出Dev诊断报告。",
+  "version": "1.0.1",
+  "description": "长漫阅读器汉化插件：支持气泡紧致贴合、OCR灵敏度动态微调（敏锐/标准/纯净）、可编辑本地与云端端点、支持单机硬件加速与云端Serverless双模部署。",
   "permissions": ["activeTab", "storage", "declarativeNetRequest"],
   "host_permissions": ["<all_urls>", "http://127.0.0.1:*/*", "http://127.0.0.1:8080/*", "http://localhost:*/*"],
   "action": {

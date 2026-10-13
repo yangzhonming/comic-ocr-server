@@ -98,7 +98,9 @@ Java_com_comic_ocr_OcrNative_nativeProcessSlice(
     jobject bitmap,
     jstring lang_str,
     jint start_y,
-    jint slice_index
+    jint slice_index,
+    jfloat rec_thresh,
+    jfloat box_thresh
 ) {
     auto t_start = std::chrono::high_resolution_clock::now();
 
@@ -138,8 +140,11 @@ Java_com_comic_ocr_OcrNative_nativeProcessSlice(
     std::string lang = lang_cstr ? lang_cstr : "korean";
     if (lang_cstr) env->ReleaseStringUTFChars(lang_str, lang_cstr);
 
+    float b_thresh = (box_thresh > 0.05f) ? box_thresh : 0.55f;
+    float r_thresh = (rec_thresh > 0.05f) ? rec_thresh : 0.70f;
+
     // 2. DET Detection
-    std::vector<TextBox> boxes = g_detector->detect(image, 1024, 0.30f, 0.55f, 1.60f);
+    std::vector<TextBox> boxes = g_detector->detect(image, 1024, 0.30f, b_thresh, 1.60f);
 
     // 3. Korean horizontal merge
     bool is_korean = (lang == "korean" || lang == "kr" || lang == "ko");
@@ -168,6 +173,18 @@ Java_com_comic_ocr_OcrNative_nativeProcessSlice(
         }
     }
 
+    if (crops.empty()) {
+        auto t_end = std::chrono::high_resolution_clock::now();
+        double cost_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
+        std::ostringstream json;
+        json << std::fixed << std::setprecision(2);
+        json << "{\"code\":0,\"message\":\"success\",\"slice_index\":" << slice_index
+             << ",\"start_y\":" << start_y
+             << ",\"cost_ms\":" << cost_ms
+             << ",\"bubbles\":[]}";
+        return env->NewStringUTF(json.str().c_str());
+    }
+
     // 5. REC Recognition
     std::vector<RecResult> rec_results = g_recognizer->recognizeBatch(crops, lang);
 
@@ -177,9 +194,11 @@ Java_com_comic_ocr_OcrNative_nativeProcessSlice(
         const auto& rec = rec_results[i];
         if (rec.text.empty()) continue;
 
-        // Threshold check: 0.70 min rec score
-        if (rec.score < 0.70f) continue;
-        if (det_scores[i] < 0.70f && rec.score < 0.75f) continue;
+        // Dynamic threshold check
+        if (rec.score < r_thresh) continue;
+        float det_floor = std::max(0.40f, b_thresh);
+        float rec_floor = std::max(0.45f, r_thresh - 0.05f);
+        if (det_scores[i] < det_floor && rec.score < rec_floor) continue;
         if (BubbleClustering::isNoiseOrWatermark(rec.text)) continue;
 
         TextLine tl;

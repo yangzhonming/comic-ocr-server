@@ -1,11 +1,11 @@
 # ComicFlow / ComicOCR - 现代化长漫实时流式汉化全栈系统 (Cloud & Mobile Edge Dual-Engine)
 
-> 🚀 **端云双擎 · 手机本地极速 OCR 引擎 (ComicOCR) + 云端 Serverless 容器服务 + 沉浸式长漫汉化插件 (v1.0.0)**
+> 🚀 **端云双擎 · 手机本地极速 OCR 引擎 (ComicOCR v1.0.3) + 云端 Serverless 容器服务 + 沉浸式长漫汉化插件 (v1.0.1)**
 >
 > 本项目是一套面向现代化 Web 漫画阅读的深度优化智能识别与汉化系统。系统支持**“端侧感知与裁切 + 手机端侧/云端双擎 OCR 识别 + 前端直连大语言模型流式回填”**的全链路闭环：
-> 1. **移动端本地边缘引擎 (ComicOCR)**：将深度学习推理直接下沉部署到用户的安卓手机（以一加 13 / 骁龙 8 至尊版为实测验证平台），实现 **零服务器成本、低功耗、全私密** 的离线级体验；
-> 2. **云端轻量化容器微服务 (Serverless Backend)**：面向纯 CPU 弹性容器（阿里云 FC 3.0 / Docker），提供内存直通解码、190MB 极致轻量常驻与多语种预热池；
-> 3. **全功能移动/桌面阅读插件 (v1.0.0 Web Extension)**：支持手机端 Lemur (狐猴) / Kiwi / 电脑端 Chrome，具备虚拟长卷坐标系、动态安全落刀切片、双重语料库即时持久化与多通道物理材质分流。
+> 1. **移动端本地边缘引擎 (ComicOCR v1.0.3)**：将深度学习推理直接下沉部署到安卓手机，实装 **WakeLock + WifiLock + 电池白名单** 极致后台抗冻结机制，实现 **零服务器成本、低功耗、全私密、零掉线** 的离线级体验；
+> 2. **云端轻量化容器微服务 (Serverless Backend v1.0.3)**：面向纯 CPU 弹性容器（阿里云 FC 3.0 / Docker），提供内存直通解码、动态召回阈值传参与国内高速 ACR 镜像；
+> 3. **全功能移动/桌面阅读插件 (v1.0.1 Web Extension)**：支持手机端 Lemur (狐猴) / Kiwi / 电脑端 Chrome，实装【🟢 敏锐 / 🟡 标准 / 🔴 纯净 / ⚙️ 自定义滑块】四档召回模式与作品专属记忆，支持自由编辑与一键重置本地/云端端点。
 
 ---
 
@@ -86,13 +86,18 @@ flowchart TD
 
 `android/` 目录为原生 Android 边缘端工程，提供高性能、零网络延迟的本地 OCR HTTP 微服务。
 
-### 1. 通信与调度层 (Ktor CIO Coroutines)
-* **轻量级异步服务**：采用 Kotlin 官方 **Ktor CIO (Coroutine I/O)** 嵌入式网络引擎，监听本地 `127.0.0.1:8080`；
-* **低功耗休眠机制**：纯协程非阻塞调度，空闲状态完全进入深度休眠，无后台 Wakelock 锁电损耗；
-* **极低功耗实测**：在一加 13（6000mAh 冰川电池）实测空闲待机耗电仅 **~8.1 mAh/h**（放置 24 小时仅耗电约 3%）。
+### 1. 通信与后台防冻结机制 (Ktor CIO & Zero-Freeze Resilience)
+* **轻量级异步服务**：采用 Kotlin 官方 **Ktor CIO (Coroutine I/O)** 嵌入式网络引擎，监听本地 `127.0.0.1:8080`（支持自定义绑定与同局域网设备访问）；
+* **🛡️ 极致后台抗杀与防冻结架构 (Zero-Freeze)**：针对用户在切后台、息屏翻页或阅读长漫期间系统 Freezer 冻结导致的“OCR 卡死不响应”痛点，全量实装四大防护网：
+  * **常驻 Partial WakeLock**：服务运行期间常驻获取 `PowerManager.PARTIAL_WAKE_LOCK`，确保息屏或切换浏览器时 CPU 算力持续在线；
+  * **高吞吐 WifiLock**：同步申请 `WifiManager.WIFI_MODE_FULL_HIGH_PERF`，防止无线网卡进入低功耗节能休眠导致本地 Socket 超时；
+  * **高优先级前台通知**：升级前台通知渠道为 `NotificationManager.IMPORTANCE_HIGH`（静音零振扰），向系统声明关键服务优先级；
+  * **电池优化白名单引导**：App 启动时自动检测并在需要时唤起 `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`，避免系统强杀。
 
 ### 2. C++20 NDK 原生计算与排版决策 (Native Core)
 核心源码位于 [`android/app/src/main/cpp/`](file:///android/app/src/main/cpp/)：
+* **动态阈值双轨调控 (Dynamic Sensitivity Control)**：
+  JNI 层接收来自前端的动态置信度参数 `rec_thresh`（默认 0.50~0.70）与检测候选框门槛 `box_thresh`（默认 0.45~0.55），实时下发给原生算子执行高精度或高召回过滤，彻底解决特定漫画由于阈值过死导致的对白漏识；
 * **物理行分桶算法 (Line Bucketization)**：
   针对紧凑对白场景下传统检测器容易切碎单行的问题，计算行间纵向投影重叠比例：
   $$\text{Overlap}_Y = \frac{\min(B_{1.\text{bottom}}, B_{2.\text{bottom}}) - \max(B_{1.\text{top}}, B_{2.\text{top}})}{\min(\text{Height}_1, \text{Height}_2)} \ge 0.50$$
@@ -216,6 +221,20 @@ flowchart TD
 * **即时保存无感知**：录入专有名词后即时生效，无需滚动至弹窗底部点击保存；即使关闭遮罩或切换网页，语料与世界观设定 100% 保持；
 * **作品 Slug 自动绑定**：根据当前漫画 URL 动态绑定作品档案，跨章节跳转阅读无缝继承专有名词库。
 
+### 7. 识别灵敏度与对白召回模式 (v1.0.1 新增特性)
+文件位置：[`plugin/floating-ball.js`](file:///plugin/floating-ball.js), [`plugin/store.js`](file:///plugin/store.js)
+* **三大快捷召回模式**：
+  * **🟢 敏锐模式 (`rec: 0.50, box: 0.45`)**：底线全面放宽，强力捕获情绪拟声词、手写涂鸦、暗底对白与艺术字；
+  * **🟡 标准平衡 (`rec: 0.70, box: 0.55`)**：官方推荐基线，常规黑白/彩色网漫首选，兼顾准确度与速度；
+  * **🔴 纯净模式 (`rec: 0.82, box: 0.65`)**：极高置信度门槛，强力过滤纸张网点噪斑、隐形水印与小广告。
+* **⚙️ 高级自定义抽屉**：展开可实时拖动 `rec_thresh` (0.30~0.90) 与 `box_thresh` (0.30~0.80) 滑块，动态查看置信度；
+* **单部作品专属记忆**：配置自动与当前漫画 URL/Slug 深度绑定，每部漫画自适应不同画风，换漫自动无缝切换。
+
+### 8. 端点解耦与自定义局域网穿透 (v1.0.1 新增特性)
+* **本地与云端彻底解耦**：移除任何特定机型专享标识，通用适配所有 Android 与桌面设备；
+* **本地服务端点可编辑**：默认 `http://127.0.0.1:8080`，可修改为同一局域网 Wi-Fi 下其他手机或本地 NAS 设备的 IP（如 `http://192.168.1.5:8080`），并提供【一键重置为 127.0.0.1】快捷操作；
+* **特权管道代发**：经由插件后台 Service Worker 特权环境直连，100% 免疫网页端 HTTPS Mixed Content 限制。
+
 ---
 
 ## 五、 云端 57 切片真实压测报告 (Cloud Serverless Stress Benchmark)
@@ -263,31 +282,65 @@ flowchart TD
 
 ## 六、 快速部署与上手指南 (Quick Start)
 
-### 1. 手机端 ComicOCR 本地运行 (Android App)
-1. 安装项目打包的 `ComicOCR-v1.0.2.apk` 到安卓手机；
+### 1. 手机端 ComicOCR 本地运行 (Android App v1.0.3)
+1. 从 Release 下载并安装 `ComicOCR-v1.0.3.apk` 到安卓手机；
 2. 打开 App，在主控制台点击底部的 **【启动本地 OCR 服务】** 按钮；
-3. 状态指示灯变绿（显示 `PORT: 8080 | RUNNING`）即表示移动端本地服务就绪；
-4. 手机端浏览器插件默认已推荐并内置 `http://127.0.0.1:8080`，开箱即用。
+3. 状态指示灯变绿（显示 `ONLINE | PORT: 8080`）即表示移动端本地服务就绪；
+4. 首次启动建议允许加入系统【忽略电池优化白名单】，App 已全量常驻 WakeLock + WifiLock，看漫期间防杀防冻结；
+5. 手机端浏览器插件默认内置 `http://127.0.0.1:8080`，开箱即用。
 
-### 2. 前端浏览器插件安装 (Chrome / Lemur / Kiwi)
-1. 从根目录获取打包好的 `comic-translate-plugin-v1.0.0.zip` 并解压（或直接加载 [plugin/](file:///plugin/) 目录）；
+### 2. 前端浏览器插件安装 (Chrome / Lemur / Kiwi v1.0.1)
+1. 从 Release 获取打包好的 `comic-translate-plugin-v1.0.1.zip` 并解压（或直接在开发者模式加载 [plugin/](file:///plugin/) 目录）；
 2. 手机端推荐使用 **Lemur (狐猴) 浏览器** 或 **Kiwi 浏览器**；桌面端使用 **Chrome / Edge**；
 3. 浏览器地址栏输入 `chrome://extensions/`，开启【开发者模式】；
-4. 点击【加载已解压的扩展程序】，选择 `plugin/` 目录；
-5. 打开任意漫画网站，点击左侧出现的汉化控制球，即可开启无感流式汉化。
+4. 点击【加载已解压的扩展程序】，选择解压后的插件文件夹；
+5. 打开任意长篇漫画网站，点击悬浮球打开设置，可随时在【🟢 敏锐 / 🟡 标准 / 🔴 纯净】中切换灵敏度，或自由修改/重置服务端点 IP。
 
-### 3. 云端 Docker 与阿里云函数计算 FC 3.0 部署
-若需要作为公网多用户共享服务：
+### 3. 云端 Docker 部署与阿里云 ACR 预构建镜像 (Cloud Docker v1.0.3)
+若需要作为公网多用户共享服务或部署在云服务器：
+
+#### 方案 A：阿里云容器镜像服务 ACR (国内秒级极速拉取，推荐)
 ```bash
-# 1. 本地启动 Docker 服务 (映射 8000 端口)
-docker run -d --name comic-ocr-server -p 8000:8000 \
-  crpi-xxxx.cn-shenzhen.personal.cr.aliyuncs.com/<namespace>/comic:v2
+# 1. 直接拉取阿里云预构建镜像 (国内免翻墙高速直连)
+docker pull registry.cn-hangzhou.aliyuncs.com/comic-translate/comic-ocr-server:v1.0.3
 
-# 2. 健康检查
+# 2. 启动容器 (映射 8000 端口，开机自启)
+docker run -d --name comic-ocr-server -p 8000:8000 \
+  --restart unless-stopped \
+  registry.cn-hangzhou.aliyuncs.com/comic-translate/comic-ocr-server:v1.0.3
+
+# 3. 健康检查
 curl http://127.0.0.1:8000/health
-# 返回: {"status":"ok","version":"1.0.0","device":"cpu","loaded_models":["kr","en","jp"]}
+# 返回: {"status":"ok","version":"1.0.3","device":"cpu","loaded_models":["kr","en","jp"]}
 ```
-* **阿里云函数计算 FC 3.0**：创建服务选择“自定义容器”，端口填写 `8000`，推荐规格 `1.5 vCPU + 1024 MB` 内存，将公网 URL 填入插件设置面板中的 OCR 地址即可。
+
+#### 方案 B：使用 Docker Compose 一键启动
+创建 `docker-compose.yml` 文件：
+```yaml
+version: '3.8'
+services:
+  comic-ocr:
+    image: registry.cn-hangzhou.aliyuncs.com/comic-translate/comic-ocr-server:v1.0.3
+    container_name: comic-ocr-server
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - TIMEOUT_KEEP_ALIVE=75
+```
+执行启动：
+```bash
+docker compose up -d
+```
+
+#### 方案 C：本地 Dockerfile 自行编译
+```bash
+docker build -t comic-ocr-server:v1.0.3 .
+docker run -d --name comic-ocr-server -p 8000:8000 comic-ocr-server:v1.0.3
+```
+
+* **阿里云函数计算 FC 3.0**：创建服务选择“自定义容器”，填写上述镜像地址，端口填写 `8000`，推荐规格 `1.5 vCPU + 1024 MB` 内存，将分配的公网 URL 填入插件设置中的云端 OCR 地址即可。
 
 ---
 
@@ -295,24 +348,24 @@ curl http://127.0.0.1:8000/health
 
 ```text
 comic-ocr-server / comic-translate-mobile
-├── android/                            # [新增] Android 本地边缘端 OCR 工程 (ComicOCR App)
-│   ├── app/src/main/cpp/               # C++20 NDK 核心 (行分桶、采样、ncnn JNI)
-│   ├── app/src/main/java/              # Ktor CIO 异步服务与暗夜极客 UI
+├── android/                            # Android 本地边缘端 OCR 工程 (ComicOCR App v1.0.3)
+│   ├── app/src/main/cpp/               # C++20 NDK 核心 (动态阈值、行分桶、采样、ncnn JNI)
+│   ├── app/src/main/java/              # Ktor CIO 协程服务 + WakeLock/WifiLock 防冻结
 │   └── app/src/main/assets/            # ncnn 移动端全语种模型与字典
-├── app/                                # 云端 Python FastAPI 异步 OCR 服务源码
-│   ├── main.py                         # 路由入口与生命周期预热
-│   ├── ocr_engine.py                   # 文本检测/识别、长宽比过滤与韩英差异化分支
+├── app/                                # 云端 Python FastAPI 异步 OCR 服务源码 (v1.0.3)
+│   ├── main.py                         # 路由入口与生命周期预热 (支持动态 rec_thresh / box_thresh)
+│   ├── engine.py                       # RapidOCR 引擎管理与双轨动态置信度过滤
 │   ├── styling.py                      # 16阶边界环采样取色与亮度强保底
 │   └── clustering.py                   # BFS 空间连通图聚类与角色决策
-├── plugin/                             # [升级 v1.0.0] Chrome / Lemur 浏览器汉化插件
-│   ├── manifest.json                   # v1.0.0 清单
-│   ├── store.js                        # 双重存储机制，语料库即时持久化
-│   ├── floating-ball.js                # 悬浮球交互控制面板
-│   ├── capture.js                      # 页面捕获与切片调度
+├── plugin/                             # Chrome / Lemur 浏览器汉化插件 (v1.0.1)
+│   ├── manifest.json                   # v1.0.1 清单
+│   ├── store.js                        # 灵敏度三模/自定义存储与作品独立记忆
+│   ├── floating-ball.js                # 悬浮球设置面板 (灵敏度切换、端点编辑与一键重置)
+│   ├── capture.js                      # 页面捕获与切片调度 (支持局域网 IP)
 │   └── slicing/                        # 虚拟长卷统一坐标系与波谷安全切片
-├── ComicOCR-v1.0.2.apk                 # [新增] Android 移动端安装包 (Ktor + C++ NDK + ncnn)
-├── comic-translate-plugin-v1.0.0.zip   # 插件 v1.0.0 离线安装包
-├── Dockerfile                          # 云端容器构建文件
+├── ComicOCR-v1.0.3.apk                 # [最新发布] Android 移动端安装包 (WakeLock 防冻结 + 动态阈值)
+├── comic-translate-plugin-v1.0.1.zip   # [最新发布] 浏览器插件 v1.0.1 离线安装包
+├── Dockerfile                          # 云端容器构建规范
 └── README.md                           # 全栈架构、芯片适配矩阵与完整文档
 ```
 

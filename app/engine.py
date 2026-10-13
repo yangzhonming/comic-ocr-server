@@ -249,16 +249,18 @@ class OcrEngineManager:
         self,
         image: np.ndarray,
         lang: str = "kr",
-        start_y: int = 0
+        start_y: int = 0,
+        rec_thresh: float = 0.70,
+        box_thresh: float = 0.55
     ) -> List[BubbleItem]:
         """
         单切片全流程处理核心管道 (极速纯净单模型版):
-        1. DET 文本检测 (单次推理，提取候选框与置信度)
+        1. DET 文本检测 (单次推理，提取候选框与置信度，支持动态 box_thresh)
         2. 极简几何绝对秒杀 (面积 < 60 或 短边 <= 3px: 灭除扫描微尘/细划痕，长句 100% 豁免)
         3. 嵌套碎框抑制
         4. 语种分支策略: 仅韩文 (kr/ko) 启用前置水平合并，英文 (en) 等禁用
         5. 原图高清裁切 (+2px padding) 与批量 REC 识别
-        6. 后过滤双置信度决断: 过滤掉 clean_text 为空或 rec_score < 0.42 的假字符
+        6. 后过滤双置信度决断: 动态 rec_thresh 放宽或过滤
         7. 边界环众数精准取色与自然几何聚类
         """
         orig_h, orig_w = image.shape[:2]
@@ -272,8 +274,15 @@ class OcrEngineManager:
         if pre_img is None:
             return []
 
-        preds = det.infer(pre_img)[0]
-        dt_boxes, dt_scores = det.postprocess_op(preds, ori_shape)
+        old_box_thresh = getattr(det.postprocess_op, 'box_thresh', 0.5)
+        try:
+            if box_thresh is not None:
+                det.postprocess_op.box_thresh = float(box_thresh)
+            preds = det.infer(pre_img)[0]
+            dt_boxes, dt_scores = det.postprocess_op(preds, ori_shape)
+        finally:
+            det.postprocess_op.box_thresh = old_box_thresh
+
         dt_boxes = det.filter_tag_det_res(dt_boxes, ori_shape)
         if dt_boxes is None or len(dt_boxes) == 0:
             return []
@@ -366,14 +375,16 @@ class OcrEngineManager:
             if not clean_text:
                 continue
 
-            # 1. 标点保护下的 REC 阈值: 无标点硬卡 0.80，有标点放宽至 0.70 兜底
+            # 1. 标点保护下的动态 REC 阈值:
             has_dialogue_punct = bool(re.search(r'[~!?¿¡]|\.{2,}', clean_text))
-            min_rec = 0.70 if has_dialogue_punct else 0.80
-            if rec_score < min_rec:
+            target_min_rec = rec_thresh if has_dialogue_punct else min(rec_thresh + 0.08, 0.82)
+            if rec_score < target_min_rec:
                 continue
 
-            # 2. 双低联合截杀 (DET 与 REC 双双勉强及格 -> 背景噪点杂线)
-            if det_score < 0.70 and rec_score < 0.75:
+            # 2. 双低联合截杀 (动态适配 rec_thresh 与 box_thresh，防背景网点误检)
+            det_floor = max(0.40, box_thresh)
+            rec_floor = max(0.45, rec_thresh - 0.05)
+            if det_score < det_floor and rec_score < rec_floor:
                 continue
 
             # 3. 强力过滤汉化组水印、扫图横幅与极短单字符噪音

@@ -86,12 +86,19 @@
     form.append("batch_index", String(batchIndex));
     form.append("is_final_batch", String(Boolean(isFinalBatch)));
     form.append("lang", selectedLang);
-    const detThresh = (typeof localStorage !== 'undefined' ? localStorage.getItem('comic_ocr_det_thresh') : null) || '0.30';
-    const detBoxThresh = (typeof localStorage !== 'undefined' ? localStorage.getItem('comic_ocr_det_box_thresh') : null) || '0.50';
-    const recScore = (typeof localStorage !== 'undefined' ? localStorage.getItem('comic_ocr_rec_score') : null) || '0.60';
-    form.append("det_thresh", detThresh);
-    form.append("det_box_thresh", detBoxThresh);
-    form.append("rec_score", recScore);
+    let ocrCfg = null;
+    try {
+      if (globalThis.ComicConfigStore?.getOcrSensitivity) {
+        ocrCfg = globalThis.ComicConfigStore.getOcrSensitivity(globalThis.location?.href);
+      }
+    } catch {}
+    const recThresh = ocrCfg?.recThresh ?? 0.50;
+    const boxThresh = ocrCfg?.boxThresh ?? 0.45;
+    form.append("rec_thresh", String(recThresh));
+    form.append("box_thresh", String(boxThresh));
+    form.append("rec_score", String(recThresh));
+    form.append("det_box_thresh", String(boxThresh));
+    form.append("det_thresh", "0.30");
     const ocrSentAt = new Date().toISOString();
     const ocrStartTime = (typeof performance !== 'undefined') ? performance.now() : Date.now();
     let result = null;
@@ -114,9 +121,11 @@
           batchIndex,
           isFinalBatch,
           lang: selectedLang,
-          detThresh,
-          detBoxThresh,
-          recScore,
+          recThresh,
+          boxThresh,
+          detThresh: "0.30",
+          detBoxThresh: String(boxThresh),
+          recScore: String(recThresh),
           signal
         });
       } catch (err) {

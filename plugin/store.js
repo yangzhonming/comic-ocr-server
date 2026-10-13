@@ -71,10 +71,13 @@
     providers: DEFAULT_PROVIDERS,
     activeProviderId: 'p_deepseek',
     activeModel: 'deepseek-flash',
-    cloudApiUrl: 'http://127.0.0.1:8080',
+    cloudApiUrl: 'https://comic-ocr.your-domain.com',
+    localApiUrl: 'http://127.0.0.1:8080',
     useLocalBackend: true,
     ocrLang: 'kr',
     minFontSize: 13,
+    globalOcrConfig: { mode: 'sensitive', recThresh: 0.50, boxThresh: 0.45, allowTextured: true },
+    ocrComicConfigs: {},
     anchors: {},
     profiles: {},
     blacklist: [...DEFAULT_BLACKLIST],
@@ -143,10 +146,13 @@
     inMemoryState.providers = (cfg.providers && cfg.providers.length) ? cfg.providers : (legacy.providers || DEFAULT_PROVIDERS);
     inMemoryState.activeProviderId = cfg.activeProviderId || legacy.activeProviderId || 'p_deepseek';
     inMemoryState.activeModel = cfg.activeModel || legacy.activeModel || 'deepseek-flash';
-    inMemoryState.cloudApiUrl = cfg.cloudApiUrl || legacy.cloudApiUrl || 'http://127.0.0.1:8080';
+    inMemoryState.cloudApiUrl = cfg.cloudApiUrl || legacy.cloudApiUrl || 'https://comic-ocr.your-domain.com';
+    inMemoryState.localApiUrl = cfg.localApiUrl || legacy.localApiUrl || 'http://127.0.0.1:8080';
     inMemoryState.useLocalBackend = cfg.useLocalBackend ?? legacy.useLocalBackend ?? true;
     inMemoryState.ocrLang = cfg.ocrLang || legacy.ocrLang || 'kr';
     inMemoryState.minFontSize = cfg.minFontSize ?? legacy.minFontSize ?? 13;
+    inMemoryState.globalOcrConfig = cfg.globalOcrConfig || { mode: 'sensitive', recThresh: 0.50, boxThresh: 0.45, allowTextured: true };
+    inMemoryState.ocrComicConfigs = cfg.ocrComicConfigs || {};
 
     inMemoryState.anchors = (anchors && Object.keys(anchors).length > 0) ? { ...anchors } : (legacy.anchors || {});
     inMemoryState.profiles = (profiles && Object.keys(profiles).length > 0) ? { ...profiles } : (legacy.profiles || {});
@@ -170,9 +176,12 @@
             activeProviderId: inMemoryState.activeProviderId,
             activeModel: inMemoryState.activeModel,
             cloudApiUrl: inMemoryState.cloudApiUrl,
+            localApiUrl: inMemoryState.localApiUrl,
             useLocalBackend: inMemoryState.useLocalBackend,
             ocrLang: inMemoryState.ocrLang,
-            minFontSize: inMemoryState.minFontSize
+            minFontSize: inMemoryState.minFontSize,
+            globalOcrConfig: inMemoryState.globalOcrConfig,
+            ocrComicConfigs: inMemoryState.ocrComicConfigs
           },
           [STORAGE_KEY_ANCHORS]: inMemoryState.anchors,
           [STORAGE_KEY_PROFILES]: inMemoryState.profiles,
@@ -270,6 +279,12 @@
     },
 
     // OCR 相关
+    getLocalApiUrl: () => inMemoryState.localApiUrl || 'http://127.0.0.1:8080',
+    setLocalApiUrl: async (url) => {
+      inMemoryState.localApiUrl = (url || '').trim() || 'http://127.0.0.1:8080';
+      await saveConfigState();
+    },
+
     getCloudApiUrl: () => inMemoryState.cloudApiUrl,
     setCloudApiUrl: async (url) => {
       inMemoryState.cloudApiUrl = (url || '').trim();
@@ -286,6 +301,35 @@
     setOcrLang: async (lang) => {
       inMemoryState.ocrLang = lang;
       await saveConfigState();
+    },
+
+    getOcrSensitivity: (rawUrl) => {
+      const idInfo = extractMangaIdentity ? extractMangaIdentity(rawUrl || globalThis.location?.href) : null;
+      const siteKey = idInfo?.siteKey || '';
+      if (siteKey && inMemoryState.ocrComicConfigs && inMemoryState.ocrComicConfigs[siteKey]) {
+        return { ...inMemoryState.ocrComicConfigs[siteKey], isBound: true };
+      }
+      return { ...(inMemoryState.globalOcrConfig || { mode: 'sensitive', recThresh: 0.50, boxThresh: 0.45 }), isBound: false };
+    },
+
+    saveOcrSensitivity: async (rawUrl, config, rememberForComic = true) => {
+      const cfg = {
+        mode: config.mode || 'sensitive',
+        recThresh: typeof config.recThresh === 'number' ? config.recThresh : parseFloat(config.recThresh) || 0.50,
+        boxThresh: typeof config.boxThresh === 'number' ? config.boxThresh : parseFloat(config.boxThresh) || 0.45,
+        allowTextured: config.allowTextured !== false
+      };
+      inMemoryState.globalOcrConfig = { ...cfg };
+      if (rememberForComic) {
+        const idInfo = extractMangaIdentity ? extractMangaIdentity(rawUrl || globalThis.location?.href) : null;
+        const siteKey = idInfo?.siteKey || '';
+        if (siteKey) {
+          if (!inMemoryState.ocrComicConfigs) inMemoryState.ocrComicConfigs = {};
+          inMemoryState.ocrComicConfigs[siteKey] = { ...cfg };
+        }
+      }
+      await saveConfigState();
+      return cfg;
     },
 
     // 水印黑名单 (全网通用)

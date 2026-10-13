@@ -10,7 +10,9 @@
                       globalThis.ComicConfigStore.getUseLocalBackend() :
                       (typeof localStorage !== 'undefined' ? localStorage.getItem('comic_dev_enable_capture') !== '0' : true);
       if (isLocal) {
-        return 'http://127.0.0.1:8080';
+        const localUrl = (globalThis.ComicConfigStore?.getLocalApiUrl ? globalThis.ComicConfigStore.getLocalApiUrl() : null) ||
+                         (typeof localStorage !== 'undefined' ? localStorage.getItem('comic_local_api_url') : null);
+        return (localUrl && localUrl.trim()) ? localUrl.trim().replace(/\/+$/, '') : 'http://127.0.0.1:8080';
       }
       const customUrl = (globalThis.ComicConfigStore?.getCloudApiUrl ? globalThis.ComicConfigStore.getCloudApiUrl() : null) ||
                         (typeof localStorage !== 'undefined' ? localStorage.getItem('comic_cloud_api_url') : null);

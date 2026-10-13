@@ -14,6 +14,8 @@ object OcrNative {
         bitmap: Bitmap,
         lang: String,
         startY: Int,
-        sliceIndex: Int
+        sliceIndex: Int,
+        recThresh: Float = 0.70f,
+        boxThresh: Float = 0.55f
     ): String
 }
