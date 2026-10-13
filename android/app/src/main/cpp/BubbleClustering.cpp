@@ -8,14 +8,165 @@
 #include <sstream>
 #include <iomanip>
 #include <unordered_map>
+#include <unordered_set>
 #include <numeric>
+#include <cctype>
+
+std::string BubbleClustering::trim(const std::string& str) {
+    auto start = str.find_first_not_of(" \t\r\n");
+    if (start == std::string::npos) return "";
+    auto end = str.find_last_not_of(" \t\r\n");
+    return str.substr(start, end - start + 1);
+}
+
+std::vector<uint32_t> BubbleClustering::utf8ToCodepoints(const std::string& str) {
+    std::vector<uint32_t> cps;
+    size_t i = 0;
+    while (i < str.size()) {
+        unsigned char c = static_cast<unsigned char>(str[i]);
+        uint32_t cp = 0;
+        size_t extra = 0;
+        if (c < 0x80) {
+            cp = c;
+            extra = 0;
+        } else if ((c & 0xE0) == 0xC0) {
+            cp = c & 0x1F;
+            extra = 1;
+        } else if ((c & 0xF0) == 0xE0) {
+            cp = c & 0x0F;
+            extra = 2;
+        } else if ((c & 0xF8) == 0xF0) {
+            cp = c & 0x07;
+            extra = 3;
+        } else {
+            i++;
+            continue;
+        }
+        if (i + extra >= str.size()) break;
+        bool valid = true;
+        for (size_t k = 1; k <= extra; ++k) {
+            unsigned char next_c = static_cast<unsigned char>(str[i + k]);
+            if ((next_c & 0xC0) != 0x80) { valid = false; break; }
+            cp = (cp << 6) | (next_c & 0x3F);
+        }
+        if (valid) {
+            cps.push_back(cp);
+            i += 1 + extra;
+        } else {
+            i++;
+        }
+    }
+    return cps;
+}
+
+bool BubbleClustering::isHangulSyllable(uint32_t cp) {
+    return (cp >= 0xAC00 && cp <= 0xD7A3) ||
+           (cp >= 0x1100 && cp <= 0x11FF) ||
+           (cp >= 0x3130 && cp <= 0x318F);
+}
+
+bool BubbleClustering::isWordChar(uint32_t cp) {
+    if ((cp >= 'a' && cp <= 'z') || (cp >= 'A' && cp <= 'Z') || (cp >= '0' && cp <= '9') || cp == '_') {
+        return true;
+    }
+    if (isHangulSyllable(cp)) {
+        return true;
+    }
+    if (cp >= 0x00C0 && cp <= 0x024F) {
+        return true;
+    }
+    return false;
+}
+
+bool BubbleClustering::hasDialoguePunct(const std::string& text) {
+    if (text.empty()) return false;
+    for (size_t i = 0; i < text.size(); ++i) {
+        unsigned char c = static_cast<unsigned char>(text[i]);
+        if (c == '~' || c == '!' || c == '?') return true;
+        if (c == '.' && i + 1 < text.size() && text[i + 1] == '.') return true;
+        if (c == 0xC2 && i + 1 < text.size()) {
+            unsigned char c2 = static_cast<unsigned char>(text[i + 1]);
+            if (c2 == 0xBF || c2 == 0xA1) return true; // ¿ or ¡
+        }
+        if (c == 0xE2 && i + 2 < text.size()) {
+            unsigned char c2 = static_cast<unsigned char>(text[i + 1]);
+            unsigned char c3 = static_cast<unsigned char>(text[i + 2]);
+            if (c2 == 0x80 && c3 == 0xA6) return true; // … (U+2026)
+        }
+        if (c == 0xEF && i + 2 < text.size()) {
+            unsigned char c2 = static_cast<unsigned char>(text[i + 1]);
+            unsigned char c3 = static_cast<unsigned char>(text[i + 2]);
+            if (c2 == 0xBC && (c3 == 0x81 || c3 == 0x9F)) return true; // ！ or ？
+            if (c2 == 0xBD && c3 == 0x9E) return true; // ～
+        }
+    }
+    return false;
+}
+
+bool BubbleClustering::hasDialogueWords(const std::string& text) {
+    if (text.empty()) return false;
+    std::vector<uint32_t> cps = utf8ToCodepoints(text);
+    if (cps.empty()) return false;
+
+    // Korean dialogue particles / pronouns: 난, 이, 그, 저, 에, 는, 은, 가, 을, 를
+    static const std::unordered_set<uint32_t> kr_words = {
+        0xB09C, // 난
+        0xC774, // 이
+        0xADF8, // 그
+        0xC800, // 저
+        0xC5D0, // 에
+        0xB294, // 는
+        0xC740, // 은
+        0xAC00, // 가
+        0xC744, // 을
+        0xB97C  // 를
+    };
+
+    // Latin dialogue words (lowercase)
+    static const std::unordered_set<std::string> latin_words = {
+        "de", "que", "un", "una", "los", "las", "el", "la", "es", "con", "en", "por", "para",
+        "the", "and", "you", "that", "was", "for", "are", "with", "his", "they"
+    };
+
+    size_t i = 0;
+    while (i < cps.size()) {
+        if (!isWordChar(cps[i])) {
+            i++;
+            continue;
+        }
+
+        size_t start = i;
+        bool is_all_ascii = true;
+        std::string ascii_word;
+        while (i < cps.size() && isWordChar(cps[i])) {
+            uint32_t cp = cps[i];
+            if (cp < 128) {
+                ascii_word += static_cast<char>(std::tolower(static_cast<int>(cp)));
+            } else {
+                is_all_ascii = false;
+            }
+            i++;
+        }
+        size_t word_len = i - start;
+
+        if (word_len == 1 && kr_words.count(cps[start])) {
+            return true;
+        }
+
+        if (is_all_ascii && latin_words.count(ascii_word)) {
+            return true;
+        }
+    }
+
+    return false;
+}
 
 std::string BubbleClustering::rgbToHex(int r, int g, int b) {
     std::stringstream ss;
     ss << "#"
        << std::setfill('0') << std::setw(2) << std::hex << std::uppercase << std::clamp(r, 0, 255)
        << std::setfill('0') << std::setw(2) << std::hex << std::uppercase << std::clamp(g, 0, 255)
-       << std::setfill('0') << std::setw(2) << std::hex << std::uppercase << std::clamp(b, 0, 255);
+       << std::setfill('0') << std::setw(2) << std::hex << std::uppercase << std::clamp(g, 0, 255);
     return ss.str();
 }
 
@@ -91,31 +242,35 @@ std::vector<TextBox> BubbleClustering::mergeHorizontalBoxes(
 }
 
 bool BubbleClustering::isNoiseOrWatermark(const std::string& text) {
-    if (text.empty()) return true;
+    std::string c = trim(text);
+    if (c.empty()) return true;
 
-    // Check single character noise
-    if (text.length() <= 1) {
-        char c = text[0];
-        if (c < 0 || c > 127) {
-            // Non-ASCII (e.g. Korean/Japanese), exempt
-        } else {
+    // 1. 单字符孤立噪音 (如 I, 1, l, -, …, —)，韩文字符单字拟声/叹词豁免
+    std::vector<uint32_t> cps = utf8ToCodepoints(c);
+    if (cps.empty()) return true;
+    if (cps.size() <= 1) {
+        if (!isHangulSyllable(cps[0])) {
             return true;
         }
     }
 
-    // Watermark keywords
-    std::string lower = text;
+    // 2. 水印与扫图组广告正则黑名单 (对齐云端)
+    std::string lower = c;
     std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-    const char* blacklists[] = {
-        "http://", "https://", "www.", ".com", ".net", ".org", ".xyz", ".me", ".top",
-        "scan", "scans", "scanlation", "traducido", "discord.gg", "t.me/"
+    static const std::vector<std::string> blacklists = {
+        "http://", "https://", "www.",
+        ".com", ".net", ".org", ".es", ".xyz", ".io", ".me", ".co", ".top", ".cc", ".site", ".online",
+        "scan", "scans", "scanlation", "scanesp", "templescan", "leeronline",
+        "traducido", "link en el navegador", "subido por", "t.me/", "discord.gg",
+        "mejor calidad", "escribiendo este link"
     };
-    for (const char* kw : blacklists) {
+    for (const auto& kw : blacklists) {
         if (lower.find(kw) != std::string::npos) return true;
     }
 
     return false;
 }
+
 
 float BubbleClustering::computeFillRatio(const cv::Mat& image, const cv::Rect& bbox) {
     if (image.empty() || bbox.width < 4 || bbox.height < 4) return 0.35f;
@@ -271,16 +426,25 @@ void BubbleClustering::extractColorsFast(
         // Median luminance standard deviation across strips
         if (!strip_medians.empty()) {
             std::vector<float> med_lums;
-            double sum_b = 0, sum_g = 0, sum_r = 0;
+            std::vector<double> m_bs, m_gs, m_rs;
             for (const auto& m : strip_medians) {
-                sum_b += m[0];
-                sum_g += m[1];
-                sum_r += m[2];
+                m_bs.push_back(m[0]);
+                m_gs.push_back(m[1]);
+                m_rs.push_back(m[2]);
                 med_lums.push_back(static_cast<float>(0.114 * m[0] + 0.587 * m[1] + 0.299 * m[2]));
             }
-            bg_color[0] = static_cast<uchar>(std::clamp<int>(std::round(sum_b / strip_medians.size()), 0, 255));
-            bg_color[1] = static_cast<uchar>(std::clamp<int>(std::round(sum_g / strip_medians.size()), 0, 255));
-            bg_color[2] = static_cast<uchar>(std::clamp<int>(std::round(sum_r / strip_medians.size()), 0, 255));
+
+            auto calcMedian = [](std::vector<double>& v) -> double {
+                if (v.empty()) return 0.0;
+                std::sort(v.begin(), v.end());
+                size_t n = v.size();
+                if (n % 2 == 1) return v[n / 2];
+                return (v[n / 2 - 1] + v[n / 2]) / 2.0;
+            };
+
+            bg_color[0] = static_cast<uchar>(std::clamp<int>(std::round(calcMedian(m_bs)), 0, 255));
+            bg_color[1] = static_cast<uchar>(std::clamp<int>(std::round(calcMedian(m_gs)), 0, 255));
+            bg_color[2] = static_cast<uchar>(std::clamp<int>(std::round(calcMedian(m_rs)), 0, 255));
 
             float mean_lum = std::accumulate(med_lums.begin(), med_lums.end(), 0.0f) / med_lums.size();
             float sq_sum = 0;
@@ -361,6 +525,7 @@ bool BubbleClustering::classifyBubbleRole(
 ) {
     std::string clean_text = text;
     std::replace(clean_text.begin(), clean_text.end(), '\n', ' ');
+    clean_text = trim(clean_text);
 
     float h_std = img_w * 0.085f;
     float height_ratio = avg_line_h / std::max(1.0f, h_std);
@@ -378,16 +543,9 @@ bool BubbleClustering::classifyBubbleRole(
     auto [bg_lum, bg_sat] = hexToLumSat(bg_hex);
     auto [fg_lum, fg_sat] = hexToLumSat(fg_hex);
 
-    // 对话情绪标点 (~ ? ¿ ! ¡ or ..)
-    static const std::regex punct_reg(R"([~?¿¡!]|\.{2,})");
-    bool has_dialogue_punct = std::regex_search(clean_text, punct_reg);
-
-    // 常见对白停止词判断 (西班牙语/英语/韩语)
-    static const std::regex word_reg(
-        R"(\b(de|que|un|una|los|las|el|la|es|con|en|por|para|the|and|you|that|was|for|are|with|his|they|난|이|그|저|에|는|은|가|을|를)\b)",
-        std::regex_constants::icase
-    );
-    bool has_dialogue_words = std::regex_search(clean_text, word_reg);
+    // 对话情绪标点与对白特征判断 (对齐云端)
+    bool has_dialogue_punct = hasDialoguePunct(clean_text);
+    bool has_dialogue_words = hasDialogueWords(clean_text);
     bool is_dialogue_text = has_dialogue_punct || has_dialogue_words;
     bool is_multi_line = (lines_count >= 2);
 
@@ -426,8 +584,9 @@ bool BubbleClustering::classifyBubbleRole(
         return true;
     }
 
-    // 2. 悬浮画外音: 必须具备对话情绪标点且多字成词
-    if (has_dialogue_punct && clean_text.length() >= 3) {
+    // 2. 悬浮画外音: 必须具备对话情绪标点且多字成词 (Unicode 字符数 >= 3)
+    size_t unicode_len = utf8ToCodepoints(clean_text).size();
+    if (has_dialogue_punct && unicode_len >= 3) {
         out_role = "ambient";
         out_is_ghost = false;
         out_surface = "textured";
@@ -589,20 +748,27 @@ std::vector<BubbleItem> BubbleClustering::clusterAndStyle(
         }
 
         // 每行内部按 X 轴从左到右排序，同行以空格连接；行间插入 \n
-        std::string merged_text;
+        std::vector<std::string> formatted_lines;
         for (auto& pline : physical_lines) {
             std::sort(pline.begin(), pline.end(), [](const TextLine& a, const TextLine& b) {
                 return a.bbox.x < b.bbox.x;
             });
             std::string line_str;
-            for (size_t w_idx = 0; w_idx < pline.size(); ++w_idx) {
-                if (w_idx > 0) line_str += " ";
-                line_str += pline[w_idx].text;
+            for (const auto& item : pline) {
+                std::string trimmed = trim(item.text);
+                if (trimmed.empty()) continue;
+                if (!line_str.empty()) line_str += " ";
+                line_str += trimmed;
             }
             if (!line_str.empty()) {
-                if (!merged_text.empty()) merged_text += "\n";
-                merged_text += line_str;
+                formatted_lines.push_back(line_str);
             }
+        }
+
+        std::string merged_text;
+        for (size_t l_idx = 0; l_idx < formatted_lines.size(); ++l_idx) {
+            if (l_idx > 0) merged_text += "\n";
+            merged_text += formatted_lines[l_idx];
         }
 
         if (merged_text.empty()) continue;

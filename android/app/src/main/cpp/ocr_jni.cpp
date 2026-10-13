@@ -214,22 +214,29 @@ Java_com_comic_ocr_OcrNative_nativeProcessSlice(
     // 5. REC Recognition
     std::vector<RecResult> rec_results = g_recognizer->recognizeBatch(crops, lang);
 
-    // 6. Clean and filter
+    // 6. Clean and filter (对齐云端后过滤逻辑)
     std::vector<TextLine> text_lines;
     for (size_t i = 0; i < rec_results.size(); ++i) {
         const auto& rec = rec_results[i];
-        if (rec.text.empty()) continue;
+        std::string clean_text = BubbleClustering::trim(rec.text);
+        if (clean_text.empty()) continue;
 
-        // Dynamic threshold check
-        if (rec.score < r_thresh) continue;
+        // 1. 标点保护下的动态 REC 阈值 (无标点 +0.08，收紧至最高 0.82)
+        bool has_dialogue_punct = BubbleClustering::hasDialoguePunct(clean_text);
+        float target_min_rec = has_dialogue_punct ? r_thresh : std::min(r_thresh + 0.08f, 0.82f);
+        if (rec.score < target_min_rec) continue;
+
+        // 2. 双低联合截杀 (防背景网点误检)
         float det_floor = std::max(0.40f, b_thresh);
         float rec_floor = std::max(0.45f, r_thresh - 0.05f);
         if (det_scores[i] < det_floor && rec.score < rec_floor) continue;
-        if (BubbleClustering::isNoiseOrWatermark(rec.text)) continue;
+
+        // 3. 强力过滤汉化组水印、扫图横幅与极短单字符噪音
+        if (BubbleClustering::isNoiseOrWatermark(clean_text)) continue;
 
         TextLine tl;
         tl.bbox = valid_box_rects[i];
-        tl.text = rec.text;
+        tl.text = clean_text;
         tl.rec_score = rec.score;
         tl.det_score = det_scores[i];
         text_lines.push_back(tl);

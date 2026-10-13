@@ -2,6 +2,7 @@
 
 #include <vector>
 #include <string>
+#include <unordered_set>
 #include <opencv2/core.hpp>
 #include "DBNetDetector.h"
 #include "CRNNRecognizer.h"
@@ -39,6 +40,13 @@ struct PurityInfo {
 
 class BubbleClustering {
 public:
+    static std::string trim(const std::string& str);
+    static std::vector<uint32_t> utf8ToCodepoints(const std::string& str);
+    static bool isHangulSyllable(uint32_t cp);
+    static bool isWordChar(uint32_t cp);
+    static bool hasDialoguePunct(const std::string& text);
+    static bool hasDialogueWords(const std::string& text);
+
     static std::vector<TextBox> mergeHorizontalBoxes(
         const std::vector<TextBox>& boxes,
         float y_overlap_ratio = 0.50f,
@@ -87,3 +95,4 @@ private:
     static bool shouldMergeDetailed(const TextLine& a, const TextLine& b);
     static std::string rgbToHex(int r, int g, int b);
 };
+
