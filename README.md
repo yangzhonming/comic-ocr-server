@@ -4,9 +4,9 @@
 
 > 📖 **完整技术文档**：详细系统架构设计、算法实现、部署与使用指南请参阅 [《中文架构与部署指南》](docs/ARCHITECTURE.zh-CN.md) | [《English Architecture & Deployment Guide》](docs/ARCHITECTURE.en.md)。
 >
-> 📦 **最新安装包直接下载**：
-> - 📱 **Android 移动端引擎**：[`ComicOCR-v1.0.3.apk`](ComicOCR-v1.0.3.apk) (集成 1px 悬浮透明覆层与全套防冻结保活)
-> - 🧩 **浏览器汉化插件**：[`comic-translate-plugin-v1.0.4.zip`](comic-translate-plugin-v1.0.4.zip) (集成经典绿色“译”Logo、赛博暗黑 Popup、Plan A 动态哨兵)
+> 📦 **最新安装包直接下载 ([GitHub Releases v1.0.4](https://github.com/yangzhonming/comic-ocr-server/releases/tag/v1.0.4))**：
+> - 📱 **Android 移动端引擎**：[`ComicOCR-v1.0.3.apk`](https://github.com/yangzhonming/comic-ocr-server/releases/download/v1.0.4/ComicOCR-v1.0.3.apk) (集成 1px 悬浮透明覆层与全套防冻结保活)
+> - 🧩 **浏览器汉化插件**：[`comic-translate-plugin-v1.0.4.zip`](https://github.com/yangzhonming/comic-ocr-server/releases/download/v1.0.4/comic-translate-plugin-v1.0.4.zip) (集成经典绿色“译”Logo、赛博暗黑 Popup、Plan A 动态哨兵)
 > - 🛠️ **算法可视化演练台**：[`启动算法演练台.bat`](启动算法演练台.bat) (双击一键调起离线切片与 OCR 调参页面)
 
 > 🚀 **端云双擎 · 手机本地极速 OCR 引擎 (ComicOCR v1.0.3) + 云端 Serverless 容器微服务 + 沉浸式长漫汉化插件 (v1.0.4)**

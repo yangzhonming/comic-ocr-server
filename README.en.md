@@ -4,9 +4,9 @@
 
 > 📖 **Full Technical Documentation**: For comprehensive architecture designs, algorithmic implementations, and deployment guides, please refer to [English Architecture & Deployment Guide](docs/ARCHITECTURE.en.md) | [《中文架构与部署指南》](docs/ARCHITECTURE.zh-CN.md).
 >
-> 📦 **Latest Release Downloads**:
-> - 📱 **Android Mobile Engine**: [`ComicOCR-v1.0.3.apk`](ComicOCR-v1.0.3.apk) (Built-in 1px transparent overlay and full anti-freeze keep-alive suite)
-> - 🧩 **Web Extension**: [`comic-translate-plugin-v1.0.4.zip`](comic-translate-plugin-v1.0.4.zip) (Integrated classic green "译" logo, cyber dark popup UI, and Plan A native sentinel)
+> 📦 **Latest Release Downloads ([GitHub Releases v1.0.4](https://github.com/yangzhonming/comic-ocr-server/releases/tag/v1.0.4))**:
+> - 📱 **Android Mobile Engine**: [`ComicOCR-v1.0.3.apk`](https://github.com/yangzhonming/comic-ocr-server/releases/download/v1.0.4/ComicOCR-v1.0.3.apk) (Built-in 1px transparent overlay and full anti-freeze keep-alive suite)
+> - 🧩 **Web Extension**: [`comic-translate-plugin-v1.0.4.zip`](https://github.com/yangzhonming/comic-ocr-server/releases/download/v1.0.4/comic-translate-plugin-v1.0.4.zip) (Integrated classic green "译" logo, cyber dark popup UI, and Plan A native sentinel)
 > - 🛠️ **Algorithm Playground**: [`启动算法演练台.bat`](启动算法演练台.bat) (One-click launcher for offline slicing and OCR parameter calibration)
 
 > 🚀 **Dual-Engine Architecture: Mobile Local High-Speed OCR Engine (ComicOCR v1.0.3) + Cloud Serverless Container Service + Immersive Web Comic Extension (v1.0.4)**
