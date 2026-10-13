@@ -1,13 +1,20 @@
 # ComicFlow / ComicOCR - 现代化长漫实时流式汉化全栈系统 (Cloud & Mobile Edge Dual-Engine)
 
-> 📖 **完整技术文档**：详细系统架构设计、算法实现、部署与使用指南请参阅 [《中文架构与部署指南》](docs/ARCHITECTURE.zh-CN.md) | [《English Architecture & Deployment Guide》](docs/ARCHITECTURE.en.md)。
+[简体中文](README.md) | [English](README.en.md)
 
-> 🚀 **端云双擎 · 手机本地极速 OCR 引擎 (ComicOCR v1.0.3) + 云端 Serverless 容器服务 + 沉浸式长漫汉化插件 (v1.0.1)**
+> 📖 **完整技术文档**：详细系统架构设计、算法实现、部署与使用指南请参阅 [《中文架构与部署指南》](docs/ARCHITECTURE.zh-CN.md) | [《English Architecture & Deployment Guide》](docs/ARCHITECTURE.en.md)。
+>
+> 📦 **最新安装包直接下载**：
+> - 📱 **Android 移动端引擎**：[`ComicOCR-v1.0.3.apk`](ComicOCR-v1.0.3.apk) (集成 1px 悬浮透明覆层与全套防冻结保活)
+> - 🧩 **浏览器汉化插件**：[`comic-translate-plugin-v1.0.4.zip`](comic-translate-plugin-v1.0.4.zip) (集成经典绿色“译”Logo、赛博暗黑 Popup、Plan A 动态哨兵)
+> - 🛠️ **算法可视化演练台**：[`启动算法演练台.bat`](启动算法演练台.bat) (双击一键调起离线切片与 OCR 调参页面)
+
+> 🚀 **端云双擎 · 手机本地极速 OCR 引擎 (ComicOCR v1.0.3) + 云端 Serverless 容器微服务 + 沉浸式长漫汉化插件 (v1.0.4)**
 >
 > 本项目是一套面向现代化 Web 漫画阅读的深度优化智能识别与汉化系统。系统支持**“端侧感知与裁切 + 手机端侧/云端双擎 OCR 识别 + 前端直连大语言模型流式回填”**的全链路闭环：
-> 1. **移动端本地边缘引擎 (ComicOCR v1.0.3)**：将深度学习推理直接下沉部署到安卓手机，实装 **WakeLock + WifiLock + 电池白名单** 极致后台抗冻结机制，实现 **零服务器成本、低功耗、全私密、零掉线** 的离线级体验；
-> 2. **云端轻量化容器微服务 (Serverless Backend v1.0.3)**：面向纯 CPU 弹性容器（阿里云 FC 3.0 / Docker），提供内存直通解码、动态召回阈值传参与国内高速 ACR 镜像；
-> 3. **全功能移动/桌面阅读插件 (v1.0.1 Web Extension)**：支持手机端 Lemur (狐猴) / Kiwi / 电脑端 Chrome，实装【🟢 敏锐 / 🟡 标准 / 🔴 纯净 / ⚙️ 自定义滑块】四档召回模式与作品专属记忆，支持自由编辑与一键重置本地/云端端点。
+> 1. **移动端本地边缘引擎 (ComicOCR v1.0.3)**：将深度学习推理直接下沉部署到安卓手机，实装 **1px 悬浮透明窗 + WakeLock + WifiLock + 电池白名单** 多重后台抗冻结机制，实现 **零服务器成本、低功耗、全私密、离线可用** 的体验；
+> 2. **云端轻量化容器微服务 (Serverless Backend v1.0.0)**：面向纯 CPU 弹性容器（阿里云 FC 3.0 / Docker），提供内存直通解码、动态召回阈值传参；
+> 3. **全功能移动/桌面阅读插件 (v1.0.4 Web Extension)**：支持手机端 Lemur (狐猴) / Kiwi 及电脑端 Chrome/Edge，实装【🟢 敏锐 / 🟡 标准 / 🔴 纯净】三档召回模式与作品专属记忆，支持自由编辑与一键重置本地/云端端点。
 
 ---
 
@@ -359,14 +366,17 @@ comic-ocr-server / comic-translate-mobile
 │   ├── engine.py                       # RapidOCR 引擎管理与双轨动态置信度过滤
 │   ├── styling.py                      # 16阶边界环采样取色与亮度强保底
 │   └── clustering.py                   # BFS 空间连通图聚类与角色决策
-├── plugin/                             # Chrome / Lemur 浏览器汉化插件 (v1.0.1)
-│   ├── manifest.json                   # v1.0.1 清单
+├── plugin/                             # Chrome / Lemur 浏览器汉化插件源码 (v1.0.4)
+│   ├── manifest.json                   # v1.0.4 清单 (包含多分辨率 Logo 图标配置)
+│   ├── icons/                          # 插件经典绿色“译”图标库 (16/48/128px)
+│   ├── popup.html / popup.css          # 赛博暗黑卡片风格控制弹窗
 │   ├── store.js                        # 灵敏度三模/自定义存储与作品独立记忆
-│   ├── floating-ball.js                # 悬浮球设置面板 (灵敏度切换、端点编辑与一键重置)
-│   ├── capture.js                      # 页面捕获与切片调度 (支持局域网 IP)
+│   ├── floating-ball.js                # 悬浮球控制核心 (长按菜单/短按启停/双模路由)
+│   ├── capture.js                      # 页面捕获与切片调度 (支持局域网 IP 与双通道转发)
 │   └── slicing/                        # 虚拟长卷统一坐标系与波谷安全切片
-├── ComicOCR-v1.0.3.apk                 # [最新发布] Android 移动端安装包 (WakeLock 防冻结 + 动态阈值)
-├── comic-translate-plugin-v1.0.1.zip   # [最新发布] 浏览器插件 v1.0.1 离线安装包
+├── ComicOCR-v1.0.3.apk                 # [最新发布] Android 移动端安装包 (1px 悬浮覆层抗冻 + 动态阈值)
+├── comic-translate-plugin-v1.0.4.zip   # [最新发布] 浏览器插件 v1.0.4 离线安装包 (含最新 Logo 与美化 Popup)
+├── 启动算法演练台.bat                  # [本地开发] 一键调起离线切片与 OCR 调参可视化页面
 ├── Dockerfile                          # 云端容器构建规范
 └── README.md                           # 全栈架构、芯片适配矩阵与完整文档
 ```
