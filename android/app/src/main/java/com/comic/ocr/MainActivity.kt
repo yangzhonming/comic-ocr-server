@@ -50,6 +50,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var textLogs: TextView
     private lateinit var textSocketStatus: TextView
     private lateinit var btnBatteryOpt: TextView
+    private lateinit var btnOverlayOpt: TextView
 
     private var beaconAnimator: AnimatorSet? = null
     private val timeFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
@@ -88,6 +89,7 @@ class MainActivity : AppCompatActivity() {
         textLogs = findViewById(R.id.text_logs)
         textSocketStatus = findViewById(R.id.text_socket_status)
         btnBatteryOpt = findViewById(R.id.btn_battery_opt)
+        btnOverlayOpt = findViewById(R.id.btn_overlay_opt)
     }
 
     private fun setupListeners() {
@@ -105,6 +107,10 @@ class MainActivity : AppCompatActivity() {
 
         btnBatteryOpt.setOnClickListener {
             requestIgnoreBatteryOptimizations()
+        }
+
+        btnOverlayOpt.setOnClickListener {
+            requestOverlayPermission()
         }
     }
 
@@ -243,6 +249,9 @@ class MainActivity : AppCompatActivity() {
         if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
             requestIgnoreBatteryOptimizations()
         }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            requestOverlayPermission()
+        }
     }
 
     @SuppressLint("BatteryLife")
@@ -255,6 +264,21 @@ class MainActivity : AppCompatActivity() {
             startActivity(intent)
         } else {
             Toast.makeText(this, "已获取电池无限制保活权限！", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun requestOverlayPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (!Settings.canDrawOverlays(this)) {
+                val intent = Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName")
+                )
+                startActivity(intent)
+                Toast.makeText(this, "请开启「允许显示在其他应用上层」权限以彻底防止后台被系统冻结", Toast.LENGTH_LONG).show()
+            } else {
+                Toast.makeText(this, "已开启悬浮防冻结权限！透明覆盖层将在后台持续锁定前台活跃状态", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -276,6 +300,18 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (Settings.canDrawOverlays(this)) {
+                btnOverlayOpt.text = "🪟 悬浮防冻结 (已启用)"
+                btnOverlayOpt.setTextColor(ContextCompat.getColor(this, R.color.status_green))
+                if (OcrHttpService.isRunning) {
+                    startOcrService()
+                }
+            } else {
+                btnOverlayOpt.text = "🪟 悬浮防冻结 (点击开启)"
+                btnOverlayOpt.setTextColor(ContextCompat.getColor(this, R.color.status_red))
+            }
+        }
         updateUiState()
     }
 

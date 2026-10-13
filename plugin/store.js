@@ -76,6 +76,7 @@
     useLocalBackend: true,
     ocrLang: 'kr',
     minFontSize: 13,
+    eagerSlicing: false,
     globalOcrConfig: { mode: 'sensitive', recThresh: 0.50, boxThresh: 0.45, allowTextured: true },
     ocrComicConfigs: {},
     anchors: {},
@@ -103,6 +104,8 @@
       if (lang) migrated.ocrLang = lang;
       const mfs = localStorage.getItem('comic_min_font_size');
       if (mfs) migrated.minFontSize = parseInt(mfs, 10);
+      const es = localStorage.getItem('comic_eager_slicing');
+      if (es !== null) migrated.eagerSlicing = es === '1' || es === 'true';
       const draft = localStorage.getItem('comic_corpus_draft');
       if (draft && draft.trim()) {
         migrated.legacyDraft = draft.trim();
@@ -151,6 +154,7 @@
     inMemoryState.useLocalBackend = cfg.useLocalBackend ?? legacy.useLocalBackend ?? true;
     inMemoryState.ocrLang = cfg.ocrLang || legacy.ocrLang || 'kr';
     inMemoryState.minFontSize = cfg.minFontSize ?? legacy.minFontSize ?? 13;
+    inMemoryState.eagerSlicing = cfg.eagerSlicing ?? legacy.eagerSlicing ?? false;
     inMemoryState.globalOcrConfig = cfg.globalOcrConfig || { mode: 'sensitive', recThresh: 0.50, boxThresh: 0.45, allowTextured: true };
     inMemoryState.ocrComicConfigs = cfg.ocrComicConfigs || {};
 
@@ -180,6 +184,7 @@
             useLocalBackend: inMemoryState.useLocalBackend,
             ocrLang: inMemoryState.ocrLang,
             minFontSize: inMemoryState.minFontSize,
+            eagerSlicing: inMemoryState.eagerSlicing,
             globalOcrConfig: inMemoryState.globalOcrConfig,
             ocrComicConfigs: inMemoryState.ocrComicConfigs
           },
@@ -214,6 +219,7 @@
         if (nv.useLocalBackend !== undefined) inMemoryState.useLocalBackend = nv.useLocalBackend;
         if (nv.ocrLang) inMemoryState.ocrLang = nv.ocrLang;
         if (nv.minFontSize) inMemoryState.minFontSize = nv.minFontSize;
+        if (nv.eagerSlicing !== undefined) inMemoryState.eagerSlicing = nv.eagerSlicing;
       }
       if (changes[STORAGE_KEY_ANCHORS]) {
         inMemoryState.anchors = changes[STORAGE_KEY_ANCHORS].newValue || {};
@@ -276,6 +282,20 @@
         window.dispatchEvent(new CustomEvent('comic-min-font-size-changed', { detail: { minFontSize: parsed } }));
       }
       return parsed;
+    },
+
+    // 激进预热无需等待 (Eager Slicing)
+    getEagerSlicing: () => !!inMemoryState.eagerSlicing,
+    setEagerSlicing: async (enabled) => {
+      inMemoryState.eagerSlicing = !!enabled;
+      try {
+        localStorage.setItem('comic_eager_slicing', inMemoryState.eagerSlicing ? '1' : '0');
+      } catch {}
+      await saveConfigState();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('comic-eager-slicing-changed', { detail: { eagerSlicing: inMemoryState.eagerSlicing } }));
+      }
+      return inMemoryState.eagerSlicing;
     },
 
     // OCR 相关

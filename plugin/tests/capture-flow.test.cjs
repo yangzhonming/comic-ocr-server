@@ -74,7 +74,7 @@ test("ComicCaptureFlow contiguousImages prefix stops at gaps", async () => {
     pageIndex,
     imageId: `img-${pageIndex}`,
     url: `http://example.com/p${pageIndex}.jpg`,
-    img: { complete: true, currentSrc: `http://example.com/p${pageIndex}.jpg`, naturalWidth: 700, naturalHeight: 1200 }
+    img: { complete: true, currentSrc: `http://example.com/p${pageIndex}.jpg`, naturalWidth: 700, naturalHeight: 100 }
   });
 
   // Send page 1 and page 4 (page 2 and 3 missing)
@@ -92,6 +92,66 @@ test("ComicCaptureFlow contiguousImages prefix stops at gaps", async () => {
   assert.equal(idxUpdated.pages.length, 4);
   session.close();
   global.fetch = originalFetch;
+});
+
+test("ComicCaptureFlow indexes loaded pages without waiting for unloaded tail", async () => {
+  const originalFetch = global.fetch;
+  const originalImage = global.Image;
+  let fallbackLoads = 0;
+  global.Image = class {
+    constructor() { fallbackLoads++; }
+  };
+  let coordinateRequests = 0;
+  global.fetch = async (url) => {
+    if (url.endsWith("/coordinates")) {
+      coordinateRequests++;
+      return { ok: true, status: 200, json: async () => ({}) };
+    }
+    if (url.endsWith("/slice")) return { ok: true, status: 200, json: async () => ({ bubbles: [] }) };
+    return { ok: false, status: 404 };
+  };
+
+  const probedPages = [];
+  const session = captureFlow.createSession({
+    chapterId: "test-lazy-tail",
+    api: "http://127.0.0.1:8765",
+    onProbe: entry => probedPages.push(entry.pageIndex)
+  });
+  const entries = Array.from({ length: 30 }, (_, index) => {
+    const pageIndex = index + 1;
+    const url = `http://example.com/p${pageIndex}.jpg`;
+    return {
+      pageIndex, imageId: `lazy-${pageIndex}`, url,
+      img: {
+        complete: pageIndex <= 10,
+        currentSrc: url,
+        naturalWidth: pageIndex <= 10 ? 700 : 0,
+        naturalHeight: pageIndex <= 10 ? 100 : 0
+      }
+    };
+  });
+
+  try {
+    await Promise.race([
+      session.replenish(entries),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("replenish waited for unloaded tail")), 500))
+    ]);
+    assert.equal(session.getIndex().pages.length, 10);
+    assert.equal(fallbackLoads, 0);
+
+    entries[10].img.complete = true;
+    entries[10].img.naturalWidth = 700;
+    entries[10].img.naturalHeight = 100;
+    await Promise.all([session.replenish(entries), session.replenish(entries)]);
+    assert.equal(session.getIndex().pages.length, 11);
+    assert.equal(fallbackLoads, 0);
+    assert.equal(coordinateRequests, 0);
+    assert.deepEqual(probedPages.sort((a, b) => a - b), Array.from({ length: 11 }, (_, index) => index + 1));
+  } finally {
+    session.close();
+    global.fetch = originalFetch;
+    global.Image = originalImage;
+  }
 });
 
 test("ComicImageCapture clearAllPageCaches preserves comic_* keys in localStorage", () => {
@@ -122,7 +182,8 @@ test("ComicImageCapture clearAllPageCaches preserves comic_* keys in localStorag
   assert.equal(store.comic_dev_auto_clear_cache, '1');
 });
 
-test("ComicCaptureFlow Tail Buffer holds undersized tail in pending until finalize()", async () => {
+test("ComicCaptureFlow soft tail flush can continue without overlapping later pages", async () => {
+  captureFlow.clearPreprobed();
   const originalFetch = global.fetch;
   const originalDocument = global.document;
   const originalImage = global.Image;
@@ -187,16 +248,30 @@ test("ComicCaptureFlow Tail Buffer holds undersized tail in pending until finali
     assert.equal(tailInfo.isFinal, false);
     assert.ok(tailInfo.tail < tailInfo.minHeight);
 
-    // Now trigger finalize()
-    session.finalize();
+    // A temporary tail flush sends the short slice without closing the chapter.
+    session.flushTail();
     await new Promise(r => setTimeout(r, 100));
-
-    // Now the final tail is cut and uploaded with isFinalBatch = true!
     assert.equal(slices.length, 2);
-    assert.equal(slices[1].meta.isFinalBatch, true);
+    assert.equal(slices[1].meta.isFinalBatch, false);
     assert.equal(slices[1].s.endY, session.getIndex().totalHeight);
     assert.equal(slices[1].s.endY, 3600);
     assert.ok(slices[1].s.height < 700 * 2.6, 'Final slice height should be less than minHeight');
+
+    await session.replenish([makeEntry(4)]);
+    session.flushTail();
+    await new Promise(r => setTimeout(r, 100));
+    assert.equal(slices.length, 3);
+    assert.equal(slices[2].s.startY, 3600);
+    assert.equal(slices[2].s.endY, 4800);
+    assert.equal(slices[2].meta.isFinalBatch, false);
+
+    await session.replenish([makeEntry(5)]);
+    session.finalize();
+    await new Promise(r => setTimeout(r, 100));
+    assert.equal(slices.length, 4);
+    assert.equal(slices[3].s.startY, 4800);
+    assert.equal(slices[3].s.endY, 6000);
+    assert.equal(slices[3].meta.isFinalBatch, true);
 
     session.close();
   } finally {
@@ -261,7 +336,7 @@ test("ComicCaptureFlow passes lang to uploadCoordinates, upload and uploadCaptur
     // Test session creation with lang passing to session operations
     const session = captureFlow.createSession({
       chapterId: "ch-session",
-      api: "http://127.0.0.1:8000",
+      api: "https://ocr.example.com",
       lang: "ja"
     });
     const makeEntry = (pageIndex) => ({
@@ -274,11 +349,32 @@ test("ComicCaptureFlow passes lang to uploadCoordinates, upload and uploadCaptur
     session.close();
 
     // Verify coordinates uploaded by session included lang = 'ja'
-    const coordReq = requests.find(r => r.url === "http://127.0.0.1:8000/coordinates" && r.body?.chapter_id === "ch-session");
+    const coordReq = requests.find(r => r.url === "https://ocr.example.com/coordinates" && r.body?.chapter_id === "ch-session");
     assert.ok(coordReq, "Session should have uploaded coordinates");
     assert.equal(coordReq.body.lang, "ja");
   } finally {
     global.fetch = originalFetch;
   }
+});
+
+test("ComicCaptureFlow supports eagerSlicing and dynamic targetFrontier control", async () => {
+  const session = captureFlow.createSession({
+    chapterId: "ch-frontier",
+    api: "http://127.0.0.1:8080",
+    eagerSlicing: false,
+    workingWidth: 800
+  });
+
+  assert.equal(session.getEagerSlicing(), false);
+  assert.ok(session.getTargetFrontier() < Infinity, "Default non-eager mode limits targetFrontier");
+
+  session.setTargetFrontier(8000);
+  assert.equal(session.getTargetFrontier(), 8000);
+
+  session.setEagerSlicing(true);
+  assert.equal(session.getEagerSlicing(), true);
+  assert.equal(session.getTargetFrontier(), Infinity);
+
+  session.close();
 });
 

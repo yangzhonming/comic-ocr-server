@@ -479,8 +479,19 @@
                 android:id="@+id/btn_battery_opt"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="⚡ 保活白名单"
+                android:text="⚡ 电池白名单"
                 android:textColor="@color/cyber_violet_light"
+                android:textSize="10sp"
+                android:fontFamily="monospace"
+                android:paddingEnd="10dp" />
+
+            <!-- Overlay Anti-Freeze Link -->
+            <TextView
+                android:id="@+id/btn_overlay_opt"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="🪟 悬浮防冻结"
+                android:textColor="@color/status_green"
                 android:textSize="10sp"
                 android:fontFamily="monospace" />
 

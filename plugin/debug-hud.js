@@ -2,26 +2,19 @@
   // 独立开发者诊断面板 (Dev HUD)
   // 测试阶段默认开启（上线时可将 DEFAULT_DEBUG 改为 false）。
   // 支持通过控制台全局指令 window.enableComicDebug() / disableComicDebug() 随时开关。
-  const DEFAULT_DEBUG = false;
   let host = null;
   let root = null;
   let isVisible = false;
   let cachedStatus = null;
 
+  // 严格单次会话模式：跨页面默认永远不自启，避免遮挡阅读
   function isActive() {
-    try {
-      if (typeof localStorage === 'undefined') return DEFAULT_DEBUG;
-      const val = localStorage.getItem('comic_debug');
-      if (val === '1' || val === 'true') return true;
-      return false;
-    } catch {
-      return false;
-    }
+    return isVisible;
   }
 
   function openOnce() {
     setVisible(true);
-    console.log('%c[ComicDebug]%c 开发者诊断看版已唤起（单次生效）！', 'color:#38bdf8;font-weight:bold;', 'color:inherit;');
+    console.log('%c[ComicDebug]%c 开发者诊断看版已在当前页面唤起（单次生效，刷新后自动关闭）！', 'color:#38bdf8;font-weight:bold;', 'color:inherit;');
   }
 
   function triggerBlobDownload(blob, filename) {
@@ -686,15 +679,15 @@
   }
 
   function enableComicDebug() {
-    try { localStorage.setItem('comic_debug', '1'); } catch {}
+    try { localStorage.removeItem('comic_debug'); } catch {}
     setVisible(true);
-    console.log('%c[ComicDebug]%c 开发者诊断面板已激活！再次关闭可执行 disableComicDebug()', 'color:#38bdf8;font-weight:bold;', 'color:inherit;');
+    console.log('%c[ComicDebug]%c 开发者诊断面板已在当前页面激活（单次生效）！再次关闭可执行 disableComicDebug()', 'color:#38bdf8;font-weight:bold;', 'color:inherit;');
   }
 
   function disableComicDebug() {
-    try { localStorage.setItem('comic_debug', '0'); } catch {}
+    try { localStorage.removeItem('comic_debug'); } catch {}
     setVisible(false);
-    console.log('%c[ComicDebug]%c 开发者诊断面板已关闭。重新开启可执行 enableComicDebug()', 'color:#94a3b8;font-weight:bold;', 'color:inherit;');
+    console.log('%c[ComicDebug]%c 开发者诊断面板已关闭。', 'color:#94a3b8;font-weight:bold;', 'color:inherit;');
   }
 
   function isCaptureMode() {
@@ -786,12 +779,10 @@
     isLocalTruecaseMode
   });
 
-  // 如果此前在 localStorage 中开启过，则在页面初始化时自动呈现
-  if (isActive()) {
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', () => setVisible(true));
-    } else {
-      setVisible(true);
+  // 清除历史遗留可能残存的持久化标记，确保新页面绝不自启
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem('comic_debug');
     }
-  }
+  } catch {}
 })();

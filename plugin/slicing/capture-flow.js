@@ -10,7 +10,8 @@
 
   function preprobe(entry) {
     if (!entry || !entry.url) return Promise.resolve(null);
-    if (preprobedMap.has(entry.imageId)) return Promise.resolve(preprobedMap.get(entry.imageId));
+    const cached = preprobedMap.get(entry.imageId);
+    if (cached?.url === entry.url) return Promise.resolve(cached);
     return probe(entry).then(res => {
       if (res && res.sourceWidth > 0 && res.sourceHeight > 0) {
         preprobedMap.set(entry.imageId, res);
@@ -21,9 +22,9 @@
 
   function probe(entry, signal) {
     if (signal?.aborted) return Promise.reject(new DOMException("Capture cancelled", "AbortError"));
-    if (preprobedMap.has(entry.imageId)) {
-      return Promise.resolve(preprobedMap.get(entry.imageId));
-    }
+    const cached = preprobedMap.get(entry.imageId);
+    if (cached?.url === entry.url) return Promise.resolve(cached);
+    if (cached) preprobedMap.delete(entry.imageId);
     // Already rendered images expose their intrinsic dimensions without another request.
     if (entry.img?.complete && entry.img.naturalWidth > 0 && entry.img.naturalHeight > 0 &&
         (entry.img.currentSrc === entry.url || entry.img.src === entry.url || !entry.img.currentSrc)) {
@@ -58,6 +59,27 @@
         clean(); reject(new Error("Image failed at page " + entry.pageIndex));
       };
       image.src = entry.url;
+    });
+  }
+
+  function isReadyForProbe(entry) {
+    if (preprobedMap.get(entry.imageId)?.url === entry.url) return true;
+    const img = entry.img;
+    if (!img) return true;
+    const currentUrl = img.currentSrc || img.src || '';
+    const isUrlMatched = !currentUrl || currentUrl === entry.url;
+    const isTiny = Boolean(img.naturalWidth > 0 && img.naturalWidth < 120 && img.naturalHeight > 0 && img.naturalHeight < 120);
+    const isDimensionValid = !isTiny && img.naturalWidth >= 30 && img.naturalHeight >= 30;
+    return Boolean(img.complete && img.naturalWidth > 0 && img.naturalHeight > 0 && isUrlMatched && isDimensionValid);
+  }
+
+  function yieldToMainThread() {
+    return new Promise(resolve => {
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => setTimeout(resolve, 0));
+      } else {
+        setTimeout(resolve, 0);
+      }
     });
   }
 
@@ -220,6 +242,8 @@
                           totalExpectedPages: initialTotalPages = 0,
                           batchSize = undefined,
                           lang = undefined,
+                          eagerSlicing = false,
+                          skipCoordinateUpload = /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::|\/|$)/i.test(api),
                           onProbe = () => {}, onCoordinate = () => {},
                           onSlice = () => {}, onBatch = () => {},
                           validateEntry = () => true }) {
@@ -241,6 +265,12 @@
     let isSlicing = false;
     let wakeWaiters = [];
     let isFinal = false;
+    let softFlushTail = false;
+    let replenishChain = Promise.resolve();
+
+    // 视口前沿控制：若开启 eagerSlicing，则不限制切片前沿；默认按需切出前沿，等待视口触碰 1300 哨兵拉动推进
+    let eagerSlicingMode = !!eagerSlicing;
+    let targetFrontierY = eagerSlicingMode ? Infinity : (customWorkingWidth ? customWorkingWidth * 6 : 3200);
 
     function waitForSlot() {
       if (inFlight < concurrencyLimit) return Promise.resolve();
@@ -269,14 +299,20 @@
       });
     }
 
-    async function replenish(currentEntries, options = {}) {
+    function replenish(currentEntries, options = {}) {
+      const next = replenishChain.then(() => replenishReady(currentEntries, options));
+      replenishChain = next.catch(() => {});
+      return next;
+    }
+
+    async function replenishReady(currentEntries, options = {}) {
       if (!active || signal?.aborted) return;
       if (options?.totalExpectedPages) {
         totalExpectedPages = options.totalExpectedPages;
       }
       const toProbe = [];
       for (const entry of currentEntries) {
-        if (!images[entry.pageIndex - 1]) {
+        if (!images[entry.pageIndex - 1] && isReadyForProbe(entry)) {
           toProbe.push(entry);
         }
       }
@@ -286,8 +322,9 @@
       if (isFinal) {
         isFinal = false;
       }
+      softFlushTail = false;
 
-      // 顶格 6 并发探测新增图片尺寸
+      // 只探测已加载图片；未加载的尾页由后续 load 事件重新补货，不能阻塞当前连续前缀。
       let cursor = 0;
       await Promise.all(Array.from({ length: Math.min(6, toProbe.length) }, async () => {
         while (cursor < toProbe.length) {
@@ -321,9 +358,12 @@
         contiguousImages.push(images[i]);
       }
 
-      if (contiguousImages.length > 0) {
+      if (contiguousImages.length > (index?.pages.length || 0)) {
         index = strip.buildIndex(contiguousImages, { coordinateId: chapterId, workingWidth });
-        await uploadCoordinates(index, { api, chapterId, signal, lang: sessionLang });
+        // The Android loopback endpoint only acknowledges /coordinates; the client owns this index.
+        if (!skipCoordinateUpload) {
+          await uploadCoordinates(index, { api, chapterId, signal, lang: sessionLang });
+        }
         onCoordinate(index);
 
         if (!provider) {
@@ -350,6 +390,7 @@
           const remaining = availableHeight - startY;
 
           if (remaining <= 0) {
+            softFlushTail = false;
             if (isFinal) break;
             await Promise.race([
               waitForMore(),
@@ -362,7 +403,7 @@
           }
 
           // 若剩余高度不足以切出一个安全切片，且会话处于活跃状态，挂起等待后续图片补货
-          if (remaining < minHeight && !isFinal) {
+          if (remaining < minHeight && !isFinal && !softFlushTail) {
             await Promise.race([
               waitForMore(),
               new Promise((_, reject) => {
@@ -370,13 +411,13 @@
               })
             ]).catch(() => {});
             if (!active || signal?.aborted) break;
-            if (index.totalHeight === availableHeight && !isFinal) {
-              continue;
-            }
+            // Recompute the new frontier before planning a cut: a newly loaded page
+            // can still leave less than minHeight available.
+            continue;
           }
 
           let endY, analysis = null;
-          if (isFinal && remaining <= maxHeight) {
+          if ((isFinal || softFlushTail) && remaining <= maxHeight) {
             endY = index.totalHeight;
           } else {
             const allowedMax = Math.min(maxHeight, isFinal ? remaining : Math.max(minHeight, remaining - minTail));
@@ -437,6 +478,8 @@
           };
 
           startY = endY;
+          if (softFlushTail && startY >= availableHeight) softFlushTail = false;
+          await yieldToMainThread();
 
           // 核心流式并发：申请槽位（若在飞任务达到 concurrencyLimit 则异步等待）
           await waitForSlot();
@@ -446,14 +489,31 @@
           const isFinalSlice = isFinal && (startY >= index.totalHeight);
           const task = (async (s, num, isLast) => {
             try {
-              const res = await upload(s, {
-                api,
-                chapterId,
-                signal,
-                batchIndex: num,
-                isFinalBatch: isLast,
-                lang: sessionLang
-              });
+              let res = null;
+              let retries = 0;
+              const maxRetries = 1;
+              while (retries <= maxRetries) {
+                try {
+                  res = await upload(s, {
+                    api,
+                    chapterId,
+                    signal,
+                    batchIndex: num,
+                    isFinalBatch: isLast,
+                    lang: sessionLang
+                  });
+                  break;
+                } catch (e) {
+                  if (e?.name === "AbortError" || !active || signal?.aborted) throw e;
+                  retries++;
+                  if (retries > maxRetries) throw e;
+                  console.warn(`[ComicCaptureFlow] 切片 #${num} 首次请求波动，启动快速重试...`, e?.message || e);
+                  await new Promise(r => setTimeout(r, 400));
+                }
+              }
+
+              if (!active || signal?.aborted) return null;
+
               onSlice(s, num, {
                 batchIndex: num,
                 isFinalBatch: isLast,
@@ -503,6 +563,14 @@
     function finalize() {
       if (!active || isFinal) return;
       isFinal = true;
+      softFlushTail = false;
+      notifyWaiters();
+      void triggerSliceLoop();
+    }
+
+    function flushTail() {
+      if (!active || isFinal || !index || startY >= index.totalHeight) return;
+      softFlushTail = true;
       notifyWaiters();
       void triggerSliceLoop();
     }
@@ -516,7 +584,7 @@
         frontierY: index.totalHeight,
         tail: remaining,
         minHeight,
-        pending: remaining > 0 && remaining < minHeight && !isFinal,
+        pending: remaining > 0 && remaining < minHeight && !isFinal && !softFlushTail,
         isFinal
       };
     }
@@ -541,10 +609,26 @@
     return {
       replenish,
       finalize,
+      flushTail,
       finish,
       close,
       getIndex() { return index; },
       getTailInfo,
+      setTargetFrontier(limitY) {
+        if (limitY === undefined || limitY === null) return;
+        targetFrontierY = Math.max(targetFrontierY, limitY);
+        notifyWaiters();
+        void triggerSliceLoop();
+      },
+      setEagerSlicing(val) {
+        eagerSlicingMode = !!val;
+        if (eagerSlicingMode) targetFrontierY = Infinity;
+        notifyWaiters();
+        void triggerSliceLoop();
+      },
+      getEagerSlicing() { return eagerSlicingMode; },
+      getTargetFrontier() { return targetFrontierY; },
+      getCommittedY() { return startY; },
       getSlicesCompleted() { return sliceNumber; },
       getBatchesCompleted() { return sliceNumber; },
       getPendingBatchCount() { return inFlight; },

@@ -25,6 +25,10 @@
 
   const MIN_WIDTH_RATIO = 0.68;
   const CENTER_TOLERANCE = 0.16;
+  const REPLENISH_QUIET_MS = 300;
+  const REPLENISH_MAX_WAIT_MS = 1200;
+  const TAIL_SETTLE_MS = 1200;
+  const LAZY_LOOKAHEAD = 4;
 
   let reader = null;
   let entries = [];
@@ -59,6 +63,14 @@
   let statusListener = () => {};
   let captureStats = { attribute: 0, observer: 0 };
   let captureSession = null;
+  let replenishTimer = null;
+  let replenishFirstQueuedAt = 0;
+  let replenishPendingEntries = null;
+  let replenishInitialWindow = false;
+  let lastReplenishSignature = '';
+  let initialDiscoveredCount = 0;
+  let initialTailTimer = null;
+  let initialTailHandled = false;
   let startClickTime = 0;
   let readerDetectedTime = 0;
   let firstImageReadyLogged = false;
@@ -120,6 +132,7 @@
         const entry = targets[i];
         const url = getImageUrl(entry.img);
         if (!url) continue;
+        if (!entry.img.complete || entry.img.naturalWidth <= 0 || entry.img.naturalHeight <= 0) continue;
 
         if (globalThis.ComicCaptureFlow?.preprobe) {
           const probed = await globalThis.ComicCaptureFlow.preprobe({
@@ -291,7 +304,7 @@
     return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0;
   }
 
-  const PLACEHOLDER_PATTERN = /(?:spacer|blank|pixel|empty|1x1|loading|default\.(?:png|gif|jpg|webp)|placeholder|grey|gray|spinner|dot\.(?:png|gif|jpg|webp)|transparent|dummy|avatar)/i;
+  const PLACEHOLDER_PATTERN = /(?:spacer|blank|pixel|empty|1x1|loading|default\.(?:png|gif|jpg|webp)|placeholder|grey|gray|spinner|dot\.(?:png|gif|jpg|webp)|transparent|dummy|avatar|thumb|thumbnail|\/small\/|\_small\.|blur)/i;
 
   function isPlaceholder(url, img) {
     if (!url) return true;
@@ -373,7 +386,11 @@
     const realUrl = knownUrl || getImageUrl(img);
     if (!realUrl || realUrl.startsWith('data:')) return false;
     const current = urlCandidate(img.currentSrc || img.src);
-    if (current === realUrl) return false;
+    if (current === realUrl) {
+      if (img.getAttribute('loading') !== 'lazy') return false;
+      img.setAttribute('loading', 'eager');
+      return true;
+    }
     if (img.dataset.comicPromoting === '1') return false;
     img.dataset.comicPromoting = '1';
     img.src = realUrl;
@@ -384,23 +401,25 @@
     return true;
   }
 
-  function processImageElement(img) {
-    if (!img || !img.isConnected) return;
-    promoteLazyImage(img);
-  }
-
-  function promoteLazyImages(root) {
+  function promoteLazyImages(root, orderedImages) {
     if (!root?.querySelectorAll) return 0;
+    const images = orderedImages || Array.from(root.querySelectorAll('img'));
+    const firstPending = images.findIndex(img => {
+      const url = getImageUrl(img);
+      return url && !(img.complete && img.naturalWidth > 0 && img.naturalHeight > 0 &&
+        (img.currentSrc === url || img.src === url || !img.currentSrc));
+    });
+    if (firstPending < 0) return 0;
     let count = 0;
-    for (const img of root.querySelectorAll('img')) {
-      if (promoteLazyImage(img)) count++;
+    // Keep only a small look-ahead window active instead of requesting the whole chapter at once.
+    for (let i = firstPending; i < Math.min(images.length, firstPending + LAZY_LOOKAHEAD); i++) {
+      if (promoteLazyImage(images[i])) count++;
     }
     return count;
   }
 
   function collectOrderedImages(currentReader) {
     if (!currentReader?.root?.isConnected) return [];
-    promoteLazyImages(currentReader.root);
     const known = (currentReader.imageNodes || []).filter(img => img?.isConnected);
     const allImages = Array.from(currentReader.root.querySelectorAll?.('img') || []);
     if (!known.length && !allImages.length) return [];
@@ -445,7 +464,7 @@
       }
     }
 
-    return [...candidates]
+    const ordered = [...candidates]
       .filter(img => img.isConnected && isVisibleElement(img))
       .sort((a, b) => {
         const position = a.compareDocumentPosition(b);
@@ -453,6 +472,8 @@
         if (position & Node.DOCUMENT_POSITION_PRECEDING) return 1;
         return 0;
       });
+    promoteLazyImages(currentReader.root, ordered);
+    return ordered;
   }
 
   function getImageOffsetInRoot(img, rootNode) {
@@ -743,6 +764,68 @@
       scaleX: offset.width / coordinateIndex.width,
       scaleY: offset.height / page.height
     };
+  }
+
+  // ==========================================
+  // 视口前沿交叉观察器（方案 A：原生图片哨兵，0 额外 DOM，0 换算开销）
+  // 锚定在当前已就绪批次的倒数第 2 张图片，视口接近时自动唤醒补货
+  // ==========================================
+  let sentinelImageEl = null;
+  let sentinelObserver = null;
+
+  function initSentinelObserver() {
+    if (sentinelObserver) return;
+    sentinelObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting && running && captureSession) {
+          onSentinelImageIntersect();
+        }
+      }
+    }, {
+      root: null, // 默认当前浏览器屏幕视口 (window)
+      // 提前 1 屏 (800px) 温和预知，所有移动端浏览器绝对稳定
+      rootMargin: '0px 0px 800px 0px',
+      threshold: 0
+    });
+  }
+
+  function updateSentinelImage(probedPages) {
+    if (!running || !probedPages || !probedPages.length) return;
+    initSentinelObserver();
+
+    // 如果当前已探明的图片已经包含了整章所有发现的图片，无需再挂哨兵（已经切到底了）
+    if (entries.length && probedPages.length >= entries.length) {
+      cleanupSentinelObserver();
+      return;
+    }
+
+    // 方案 A：锚定在当前批次的倒数第 2 张图片（若总共 <= 2 张，则锚定最后一张）
+    const targetIdx = Math.max(0, probedPages.length - 2);
+    const targetPage = probedPages[targetIdx];
+    const targetEntry = targetPage && entries[targetPage.pageIndex - 1];
+    const targetImg = targetEntry?.img;
+
+    if (targetImg && targetImg !== sentinelImageEl && targetImg.isConnected) {
+      if (sentinelImageEl && sentinelObserver) {
+        sentinelObserver.unobserve(sentinelImageEl);
+      }
+      sentinelImageEl = targetImg;
+      sentinelObserver.observe(sentinelImageEl);
+      console.log(`[ComicCapture] 🎯 方案 A 哨兵已成功挂载至第 ${targetPage.pageIndex} 页原图 (当前批次共 ${probedPages.length} 页，整章发现 ${entries.length} 页)`);
+    }
+  }
+
+  function onSentinelImageIntersect() {
+    if (!running || !captureSession) return;
+    console.log('[ComicCapture] 👁️ 读者视口滑入当前批次倒数第 2 页图片缓冲带，触发后续未就绪图片增量补货...');
+    updateEntries();
+  }
+
+  function cleanupSentinelObserver() {
+    if (sentinelObserver && sentinelImageEl) {
+      sentinelObserver.unobserve(sentinelImageEl);
+    }
+    sentinelImageEl = null;
   }
 
   function addCoordinateLine(container, y, label, type, slice = null) {
@@ -1102,15 +1185,29 @@
 
     // 触发条件 1: 累计气泡达到 14 个场景上限
     // 触发条件 2: 最后一批切片 (Final Batch) 立即收尾清空
-    if (llmRelayBucket.items.length >= BUBBLE_THRESHOLD || isFinalBatch) {
-      flushLlmBucket(isFinalBatch ? '最终收尾大包' : '场景大包');
+    // 触发条件 3: 浏览器处于后台/隐藏状态，立即直发防定时器挂起
+    const isDocHidden = typeof document !== 'undefined' && document.hidden;
+    if (llmRelayBucket.items.length >= BUBBLE_THRESHOLD || isFinalBatch || isDocHidden) {
+      flushLlmBucket(isFinalBatch ? '最终收尾大包' : (isDocHidden ? '后台防挂起大包' : '场景大包'));
     } else if (!llmRelayBucket.timer) {
-      // 触发条件 3: 800ms 超时保底发车，绝不长时间挂起
+      // 触发条件 4: 800ms 超时保底发车，绝不长时间挂起
       llmRelayBucket.timer = setTimeout(() => {
         llmRelayBucket.timer = null;
         flushLlmBucket('超时保底大包');
       }, 800);
     }
+  }
+
+  // 监听浏览器前后台切换：切回前台时立即冲刷可能被浏览器节流挂起的聚合包
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        if (llmRelayBucket.items && llmRelayBucket.items.length > 0) {
+          console.log('[ComicCapture] 页面恢复可见，立即冲刷 LLM 聚合大包');
+          flushLlmBucket('切回前台恢复');
+        }
+      }
+    });
   }
 
   function flushLlmBucket(reason = '大包接力') {
@@ -1873,10 +1970,14 @@
       console.warn('[ComicCapture] 切片节点从 DOM 移除，流程中止');
     }
 
-    // 运行期间增量补货：只要发现新图片，立即送入当前切片会话
+    // 运行期间把短时间内连续到达的图片合并为一次坐标更新。
     if (running && captureSession && entries.length) {
-      markDomActivity();
       cancelEndDetector();
+      if (entries.length > initialDiscoveredCount && initialTailTimer) {
+        clearTimeout(initialTailTimer);
+        initialTailTimer = null;
+        initialTailHandled = true;
+      }
       const currentValid = entries
         .map(entry => ({
           img: entry.img,
@@ -1886,12 +1987,8 @@
         }))
         .filter(entry => entry.img.isConnected && entry.url);
 
-      console.log('[ComicCapture] 触发增量补货，当前具备地址的图片数:', currentValid.length, '总图片数:', entries.length);
-      void captureSession.replenish(currentValid).then(() => {
-        void checkFrontierState();
-      }).catch(err => {
-        console.error('[ComicCapture] 增量补货异常:', err);
-      });
+      scheduleReplenish(currentValid);
+      void checkFrontierState();
     }
 
     lastOrder = next;
@@ -1906,9 +2003,67 @@
     scanTimer = setTimeout(updateEntries, delay);
   }
 
-  async function ensureAllImagesLoaded(targetReader, signal) {
+  function scheduleReplenish(currentEntries, initial = false) {
+    if (!captureSession || !running) return;
+    const signature = currentEntries.filter(entry => {
+      const img = entry.img;
+      return img.complete && img.naturalWidth > 0 && img.naturalHeight > 0 &&
+        (img.currentSrc === entry.url || img.src === entry.url || !img.currentSrc);
+    }).map(entry => `${entry.pageIndex}:${entry.imageId}:${entry.url}:${entry.img.currentSrc}`).join('|');
+    if (!initial && signature === lastReplenishSignature) return;
+    lastReplenishSignature = signature;
+    replenishPendingEntries = currentEntries;
+    const now = Date.now();
+    if (!replenishFirstQueuedAt) {
+      replenishFirstQueuedAt = now;
+      replenishInitialWindow = initial;
+    }
+    const maxWait = replenishInitialWindow ? REPLENISH_QUIET_MS : REPLENISH_MAX_WAIT_MS;
+    const delay = Math.max(0, Math.min(REPLENISH_QUIET_MS, maxWait - (now - replenishFirstQueuedAt)));
+    clearTimeout(replenishTimer);
+    replenishTimer = setTimeout(() => {
+      replenishTimer = null;
+      replenishFirstQueuedAt = 0;
+      replenishInitialWindow = false;
+      const pending = replenishPendingEntries;
+      replenishPendingEntries = null;
+      const session = captureSession;
+      if (!running || !session || !pending?.length) return;
+      void session.replenish(pending).then(() => {
+        if (captureSession === session) void checkFrontierState();
+      }).catch(err => {
+        if (err?.name !== 'AbortError') console.error('[ComicCapture] 增量补货异常:', err);
+      });
+    }, delay);
+  }
+
+  function scheduleInitialTailFlush(index) {
+    if (initialTailHandled || initialTailTimer || !initialDiscoveredCount ||
+        !index?.pages || index.pages.length < initialDiscoveredCount) return;
+    const session = captureSession;
+    initialTailTimer = setTimeout(() => {
+      initialTailTimer = null;
+      if (!running || captureSession !== session) return;
+      if (entries.length > initialDiscoveredCount) {
+        initialTailHandled = true;
+        return;
+      }
+      const tail = session.getTailInfo();
+      if (tail.tail <= 0) {
+        initialTailHandled = true;
+        return;
+      }
+      if (!tail.pending) return;
+      initialTailHandled = true;
+      statusText = `已处理初始发现的 ${initialDiscoveredCount} 页，正在发送当前尾片；继续监听新页`;
+      notify();
+      session.flushTail();
+    }, TAIL_SETTLE_MS);
+  }
+
+  async function primeImageWindow(targetReader) {
     if (!targetReader?.root?.isConnected) return;
-    promoteLazyImages(targetReader.root);
+    collectOrderedImages(targetReader);
   }
 
   async function clearAllPageCaches() {
@@ -1977,76 +2132,10 @@
     }
   }
 
-  // ================= 前沿探测器 (Frontier Detector: CLOSED vs OPEN) =================
-  let domQuietTimer = null;
-  let isDomSettled = false;
-
-  function markDomActivity() {
-    isDomSettled = false;
-    if (domQuietTimer) clearTimeout(domQuietTimer);
-    domQuietTimer = setTimeout(() => {
-      isDomSettled = true;
-      if (running && captureSession) {
-        checkFrontierState();
-      }
-    }, 300);
-  }
-
-  function getFirstScreenImageCount() {
-    if (!entries.length) return 3;
-    const vh = window.innerHeight || 800;
-    const inFirstScreen = entries.filter(e => {
-      if (!e?.img?.isConnected) return false;
-      const r = e.img.getBoundingClientRect();
-      return r.top < vh * 1.3;
-    }).length;
-    return Math.max(2, Math.min(inFirstScreen || 3, 5));
-  }
-
-  function assessFrontierState() {
-    if (!entries.length || !captureSession) return 'OPEN';
-    const index = captureSession.getIndex ? captureSession.getIndex() : null;
-    if (!index) return 'OPEN';
-
-    const count = entries.length;
-    const probedCount = index.pages ? index.pages.length : 0;
-    const firstScreenCount = getFirstScreenImageCount();
-    // 经验门槛 1：图片数量大于 2 倍首屏加载数量（经验值最低 6 张）
-    const minCountThreshold = Math.max(6, firstScreenCount * 2);
-    const hasSufficientCount = count >= minCountThreshold;
-
-    // 经验门槛 2：总高度达到基于首图高度计算的规模（经验值 >= minCountThreshold * H1 * 0.7）
-    const firstHeight = index.pages[0]?.sourceHeight || index.width * 1.5;
-    const expectedHeightThreshold = Math.max(minCountThreshold * firstHeight * 0.7, index.width * 8);
-    const hasSufficientHeight = index.totalHeight >= expectedHeightThreshold;
-
-    // 经验门槛 3：所有当前图片已探测完毕，物理连续前缀完整
-    const isFullyProbed = probedCount >= count && count > 0;
-
-    // 经验门槛 4：DOM 静默稳定（300ms 无新增节点与高度剧变）
-    if (hasSufficientCount && hasSufficientHeight && isFullyProbed && isDomSettled) {
-      return 'CLOSED';
-    }
-    return 'OPEN';
-  }
-
+  // DOM 中的当前图片数只是已发现页数，不能用静默时间推断整章结束。
   function checkFrontierState() {
     if (!running || !captureSession || stopping) return;
-    const tailInfo = captureSession.getTailInfo ? captureSession.getTailInfo() : null;
-    if (!tailInfo || tailInfo.isFinal) return;
-
-    const state = assessFrontierState();
-    if (state === 'CLOSED') {
-      const firstScreenCount = getFirstScreenImageCount();
-      const index = captureSession.getIndex();
-      console.log(`[ComicCapture] 🚀 前沿探测器判定为 CLOSED（首屏预估 ${firstScreenCount} 张，已探明 ${entries.length} 张，画卷总高 ${index.totalHeight}px），启动全量预切直接收刀！`);
-      statusText = `已探明完整骨架（共 ${entries.length} 页），全量预切收刀中...`;
-      notify();
-      captureSession.finalize();
-    } else {
-      // OPEN 模式：保持 Tail Buffer，继续由触底检测器在读者看完全篇时兜底
-      void checkEndDetector();
-    }
+    void checkEndDetector();
   }
 
   function cancelEndDetector() {
@@ -2094,12 +2183,12 @@
         const stillReady = await isLastImageReady();
 
         if (heightStable && stillAtEnd && stillReady) {
-          console.log(`[ComicCapture] 🏁 终点检测器命中：物理触底 + DOM/高度静止，触发最终尾部收刀 (Tail: ${currentTail.tail}px, minHeight: ${currentTail.minHeight}px)`);
-          statusText = `已到达章节末尾，正在切出最终尾片 (${currentTail.tail}px)...`;
+          console.log(`[ComicCapture] 当前可见底部稳定，临时切出尾片并继续监听新页 (Tail: ${currentTail.tail}px)`);
+          statusText = `正在处理当前尾片，后续图片仍可继续补入...`;
           notify();
-          captureSession.finalize();
+          captureSession.flushTail();
         }
-      }, 400);
+      }, TAIL_SETTLE_MS);
     }
   }
 
@@ -2129,12 +2218,12 @@
     }
     firstTranslationEmitted = false;
     starting = true;
-    statusText = '正在扫描并预加载漫画图片...';
+    statusText = '正在扫描并预加载首批漫画图片...';
     notify();
 
     abortController = new AbortController();
     try {
-      await ensureAllImagesLoaded(reader, abortController.signal);
+      await primeImageWindow(reader);
     } catch { /* 忽略中断 */ }
 
     if (abortController.signal.aborted) {
@@ -2216,6 +2305,30 @@
       notify();
       return;
     }
+
+    const firstEntry = snapshot[0];
+    const firstImg = firstEntry?.img;
+    const isFirstReady = Boolean(firstImg && firstImg.complete && firstImg.naturalWidth >= 160 &&
+      (firstImg.currentSrc === firstEntry.url || firstImg.src === firstEntry.url || !firstImg.currentSrc));
+
+    if (!isFirstReady && firstImg) {
+      statusText = '第 1 页图片缓冲中，已预约就绪后自动秒开...';
+      notify();
+      promoteLazyImage(firstImg, firstEntry.url);
+      const onFirstLoad = () => {
+        firstImg.removeEventListener('load', onFirstLoad);
+        if (!running && !abortController?.signal?.aborted) {
+          console.log('[ComicCapture] 🚀 首图缓冲就绪，自动唤醒切片流水线起跑！');
+          void start();
+        }
+      };
+      firstImg.addEventListener('load', onFirstLoad, { once: true });
+      return;
+    }
+    initialDiscoveredCount = snapshot.length;
+    initialTailHandled = false;
+    clearTimeout(initialTailTimer);
+    initialTailTimer = null;
     chapterId = `${location.hostname}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
     coordinateIndex = null;
     coordinateSnapshot = null;
@@ -2238,10 +2351,14 @@
       (globalThis.ComicDebugHUD?.getOcrLang ? globalThis.ComicDebugHUD.getOcrLang() : null) || 'kr';
 
     const storedConcurrency = parseInt(typeof localStorage !== 'undefined' ? localStorage.getItem('comic_slice_concurrency') : '6', 10) || 6;
+    const isEager = globalThis.ComicConfigStore?.getEagerSlicing ? globalThis.ComicConfigStore.getEagerSlicing() : false;
 
     captureSession = ComicCaptureFlow.createSession({
       chapterId, api: API, signal: abortController.signal,
       lang: currentLang,
+      eagerSlicing: isEager,
+      skipCoordinateUpload: globalThis.ComicConfigStore?.getUseLocalBackend ?
+        globalThis.ComicConfigStore.getUseLocalBackend() : isLocal,
       concurrency: Math.max(1, Math.min(storedConcurrency, 6)),
       validateEntry: entry => {
         const current = entries[entry.pageIndex - 1];
@@ -2255,13 +2372,15 @@
       },
       onCoordinate: index => {
         coordinateIndex = index;
-        coordinateSnapshot = entries.map(entry => ({
+        coordinateSnapshot = index.pages.map(page => entries[page.pageIndex - 1]).map(entry => ({
           img: entry.img, pageIndex: entry.pageIndex,
           imageId: entry.imageId, url: getImageUrl(entry.img)
         }));
         statusText = `坐标系已锁定：宽 ${index.width}px，高 ${index.totalHeight}px`;
         console.log(`[ComicCapture] 坐标系更新: 宽 ${index.width}px, 总高 ${index.totalHeight}px, 包含原图: ${index.pages.length} 页`);
         notify();
+        updateSentinelImage(index.pages);
+        scheduleInitialTailFlush(index);
         void checkFrontierState();
       },
       onSlice: (slice, completed, batchMeta) => {
@@ -2288,6 +2407,8 @@
         statusText = `已识别 ${completed} 片 (${dialogueCount} 处对白${ambientCount > 0 ? `，${ambientCount} 处背景词` : ''}${ghostCount > 0 ? `，${ghostCount} 处拟声词` : ''})${batchMeta?.isFinalBatch ? ' [最终完成]' : ''}`;
         console.log(`[ComicCapture] 切片 #${completed} 识别完成: Y=${slice.startY}~${slice.endY}px, 对白: ${dialogueCount} 个, 背景词: ${ambientCount} 个, 拟声词: ${ghostCount} 个`);
         notify();
+
+        if (captureSession?.getIndex) scheduleInitialTailFlush(captureSession.getIndex());
         void checkFrontierState();
 
         slice._ocrTimeMs = batchMeta?.result?._ocrTimeMs || 0;
@@ -2357,14 +2478,8 @@
       window.addEventListener('scrollend', onScrollActivity, { passive: true });
     }
 
-    void captureSession.replenish(snapshot).then(() => {
-      void checkFrontierState();
-    }).catch(error => {
-      if (error?.name !== 'AbortError') {
-        statusText = `切片暂停：${error.message}`;
-        console.error('Comic slicing failed', error);
-      }
-    });
+    lastReplenishSignature = '';
+    scheduleReplenish(snapshot, true);
   }
 
   function stop() {
@@ -2376,11 +2491,16 @@
       window.removeEventListener('scrollend', onScrollActivity);
     }
     cancelEndDetector();
-    if (domQuietTimer) {
-      clearTimeout(domQuietTimer);
-      domQuietTimer = null;
-    }
-    isDomSettled = false;
+    clearTimeout(replenishTimer);
+    replenishTimer = null;
+    replenishFirstQueuedAt = 0;
+    replenishPendingEntries = null;
+    replenishInitialWindow = false;
+    lastReplenishSignature = '';
+    initialDiscoveredCount = 0;
+    initialTailHandled = false;
+    clearTimeout(initialTailTimer);
+    initialTailTimer = null;
     running = false;
     starting = false;
     stopping = true;
@@ -2390,6 +2510,7 @@
       try { ctrl.abort(); } catch {}
     }
     llmActiveControllers.clear();
+    cleanupSentinelObserver();
     if (captureSession) {
       captureSession.close();
       captureSession = null;
@@ -2406,15 +2527,12 @@
 
   function handleDomChange(targetNode) {
     if (!reader?.root?.isConnected || !targetNode) return;
-    markDomActivity();
     if (targetNode instanceof HTMLImageElement) {
-      processImageElement(targetNode);
       captureStats.observer++;
       scheduleScan(80);
     } else if (targetNode?.querySelectorAll) {
       let count = 0;
       for (const img of targetNode.querySelectorAll('img')) {
-        processImageElement(img);
         captureStats.observer++;
         count++;
       }
@@ -2442,7 +2560,6 @@
       }
     }
     if (reader?.root) {
-      promoteLazyImages(reader.root);
       ensureOverlay();
     } else if (overlayHost) overlayHost.style.display = 'none';
     updateEntries();
@@ -2493,6 +2610,13 @@
       const newSize = e?.detail?.minFontSize;
       if (newSize) {
         applyMinFontSizeToAllPatches(newSize);
+      }
+    });
+
+    window.addEventListener('comic-eager-slicing-changed', (e) => {
+      const isEager = !!e?.detail?.eagerSlicing;
+      if (captureSession?.setEagerSlicing) {
+        captureSession.setEagerSlicing(isEager);
       }
     });
   }

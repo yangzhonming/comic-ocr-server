@@ -7,6 +7,7 @@
 #include <chrono>
 #include <sstream>
 #include <iomanip>
+#include <mutex>
 
 #include <gpu.h>
 #include "DBNetDetector.h"
@@ -19,6 +20,10 @@
 
 static DBNetDetector* g_detector = nullptr;
 static CRNNRecognizer* g_recognizer = nullptr;
+static AAssetManager* g_asset_mgr = nullptr;
+static std::mutex g_ocr_mutex;
+static std::mutex g_init_mutex;
+static bool g_initialized = false;
 
 static std::string escapeJsonString(const std::string& input) {
     std::ostringstream ss;
@@ -54,10 +59,13 @@ JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void* reserved) {
 
 JNIEXPORT void JNI_OnUnload(JavaVM* vm, void* reserved) {
     LOGI("JNI_OnUnload: destroying GPU instance");
+    std::lock_guard<std::mutex> lock(g_ocr_mutex);
     delete g_detector;
     delete g_recognizer;
     g_detector = nullptr;
     g_recognizer = nullptr;
+    g_asset_mgr = nullptr;
+    g_initialized = false;
 #if NCNN_VULKAN
     ncnn::destroy_gpu_instance();
 #endif
@@ -65,29 +73,35 @@ JNIEXPORT void JNI_OnUnload(JavaVM* vm, void* reserved) {
 
 JNIEXPORT jboolean JNICALL
 Java_com_comic_ocr_OcrNative_nativeInit(JNIEnv* env, jobject thiz, jobject asset_manager) {
+    std::lock_guard<std::mutex> lock(g_init_mutex);
+    if (g_initialized && g_detector && g_recognizer) {
+        LOGI("Native OCR models already initialized");
+        return JNI_TRUE;
+    }
+
     AAssetManager* mgr = AAssetManager_fromJava(env, asset_manager);
     if (!mgr) {
         LOGE("Failed to get AAssetManager");
         return JNI_FALSE;
     }
+    g_asset_mgr = mgr;
 
     if (!g_detector) g_detector = new DBNetDetector();
     if (!g_recognizer) g_recognizer = new CRNNRecognizer();
 
-    // 1. Init DBNet
+    // 1. Init DBNet Detector
     bool det_ok = g_detector->initFromAssets(mgr, "models/ch_PP-OCRv4_det.param", "models/ch_PP-OCRv4_det.bin", true);
     if (!det_ok) {
         LOGE("Failed to init DBNet detector");
         return JNI_FALSE;
     }
 
-    // 2. Init CRNN models
+    // 2. Init Core CRNN models: Prioritize Korean & English (instant startup)
     g_recognizer->initModelFromAssets(mgr, "korean", "models/korean_PP-OCRv5_rec.param", "models/korean_PP-OCRv5_rec.bin", "dicts/ppocrv5_korean_dict.txt", true);
     g_recognizer->initModelFromAssets(mgr, "en", "models/en_PP-OCRv5_rec.param", "models/en_PP-OCRv5_rec.bin", "dicts/ppocrv5_en_dict.txt", true);
-    g_recognizer->initModelFromAssets(mgr, "japan", "models/japan_PP-OCRv4_rec.param", "models/japan_PP-OCRv4_rec.bin", "dicts/japan_dict.txt", true);
-    g_recognizer->initModelFromAssets(mgr, "cyrillic", "models/cyrillic_PP-OCRv5_rec.param", "models/cyrillic_PP-OCRv5_rec.bin", "dicts/ppocrv5_cyrillic_dict.txt", true);
 
-    LOGI("All native OCR models initialized successfully!");
+    g_initialized = true;
+    LOGI("Core native OCR models (Det + Korean + English) initialized successfully!");
     return JNI_TRUE;
 }
 
@@ -102,9 +116,10 @@ Java_com_comic_ocr_OcrNative_nativeProcessSlice(
     jfloat rec_thresh,
     jfloat box_thresh
 ) {
+    std::lock_guard<std::mutex> lock(g_ocr_mutex);
     auto t_start = std::chrono::high_resolution_clock::now();
 
-    if (!g_detector || !g_recognizer) {
+    if (!g_detector || !g_recognizer || !g_initialized) {
         return env->NewStringUTF("{\"code\":500,\"message\":\"OCR Engine not initialized\"}");
     }
 
@@ -139,6 +154,17 @@ Java_com_comic_ocr_OcrNative_nativeProcessSlice(
     const char* lang_cstr = env->GetStringUTFChars(lang_str, nullptr);
     std::string lang = lang_cstr ? lang_cstr : "korean";
     if (lang_cstr) env->ReleaseStringUTFChars(lang_str, lang_cstr);
+
+    // On-demand lazy loading for secondary languages
+    if (g_recognizer && g_asset_mgr && !g_recognizer->hasLang(lang)) {
+        if (lang == "japan" || lang == "ja" || lang == "jp" || lang == "japanese") {
+            LOGI("Lazy loading Japanese OCR model on demand...");
+            g_recognizer->initModelFromAssets(g_asset_mgr, "japan", "models/japan_PP-OCRv4_rec.param", "models/japan_PP-OCRv4_rec.bin", "dicts/japan_dict.txt", true);
+        } else if (lang == "cyrillic" || lang == "ru" || lang == "russian") {
+            LOGI("Lazy loading Cyrillic OCR model on demand...");
+            g_recognizer->initModelFromAssets(g_asset_mgr, "cyrillic", "models/cyrillic_PP-OCRv5_rec.param", "models/cyrillic_PP-OCRv5_rec.bin", "dicts/ppocrv5_cyrillic_dict.txt", true);
+        }
+    }
 
     float b_thresh = (box_thresh > 0.05f) ? box_thresh : 0.55f;
     float r_thresh = (rec_thresh > 0.05f) ? rec_thresh : 0.70f;

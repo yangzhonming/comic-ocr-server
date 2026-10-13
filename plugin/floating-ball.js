@@ -1134,6 +1134,13 @@
                 </div>
                 <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:4px;">
                   <div style="display:flex; flex-direction:column;">
+                    <span style="font-size:12px; font-weight:600; color:#f8fafc;">⚡ 激进切片预热 (无需等待)</span>
+                    <span style="font-size:10px; color:#94a3b8; margin-top:1px;">后续图片就绪时提前批量切片送检，无需等待视口滑动触碰。默认关闭（更省流量与设备算力）</span>
+                  </div>
+                  <button id="btn-toggle-eager-slicing" class="btn-toggle" style="padding:4px 10px; border-radius:6px; font-size:11px; font-weight:600; cursor:pointer; border:1px solid rgba(148, 163, 184, 0.2); background:#334155; color:#94a3b8; transition:all 0.15s;">⚪ 已关闭</button>
+                </div>
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:4px;">
+                  <div style="display:flex; flex-direction:column;">
                     <span style="font-size:12px; font-weight:600; color:#f8fafc;">开启 Dev 测试看版</span>
                     <span style="font-size:10px; color:#94a3b8; margin-top:1px;">单次会话浮窗，默认不开启，刷新或切换页面自动关闭</span>
                   </div>
@@ -1154,37 +1161,6 @@
                   <button id="btn-dec-min-font" style="width:28px; height:28px; border-radius:6px; background:#334155; border:1px solid rgba(255,255,255,0.1); color:#fff; font-size:14px; font-weight:bold; cursor:pointer; display:flex; align-items:center; justify-content:center;">-</button>
                   <input type="range" id="slider-min-font-size" min="10" max="22" step="1" value="13" style="flex:1; accent-color:#38bdf8; cursor:pointer; height:6px;">
                   <button id="btn-inc-min-font" style="width:28px; height:28px; border-radius:6px; background:#334155; border:1px solid rgba(255,255,255,0.1); color:#fff; font-size:14px; font-weight:bold; cursor:pointer; display:flex; align-items:center; justify-content:center;">+</button>
-                </div>
-              </div>
-
-              <!-- 卡片 2: 核心推理规格与切片落刀参数 (深度调优·固化锁定) -->
-              <div class="section-card" style="background:#1e293b; border:1px solid rgba(148,163,184,0.15); border-radius:8px; padding:12px; display:flex; flex-direction:column; gap:8px;">
-                <div style="font-size:11px; font-weight:700; color:#38bdf8; display:flex; align-items:center; justify-content:space-between;">
-                  <span>⚡ 核心推理规格与切片参数</span>
-                  <span style="font-size:9px; color:#22c55e; background:rgba(34,197,94,0.15); padding:1px 5px; border-radius:4px;">🔒 深度标定·已固化锁定</span>
-                </div>
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; background:#0f172a; padding:8px; border-radius:6px; font-family:monospace; font-size:11px;">
-                  <div style="display:flex; justify-content:space-between; color:#94a3b8;">
-                    <span>识别精度</span><span style="color:#38bdf8; font-weight:bold;">1024 px</span>
-                  </div>
-                  <div style="display:flex; justify-content:space-between; color:#94a3b8;">
-                    <span>在途并发</span><span style="color:#4ade80; font-weight:bold;">6 槽位</span>
-                  </div>
-                  <div style="display:flex; justify-content:space-between; color:#94a3b8;">
-                    <span>DET 门限</span><span style="color:#f8fafc; font-weight:bold;">0.30</span>
-                  </div>
-                  <div style="display:flex; justify-content:space-between; color:#94a3b8;">
-                    <span>DET 框置信</span><span style="color:#f8fafc; font-weight:bold;">0.50</span>
-                  </div>
-                  <div style="display:flex; justify-content:space-between; color:#94a3b8;">
-                    <span>REC 过滤</span><span style="color:#f8fafc; font-weight:bold;">0.70</span>
-                  </div>
-                  <div style="display:flex; justify-content:space-between; color:#94a3b8;">
-                    <span>切片压缩比</span><span style="color:#fbbf24; font-weight:bold;">3.46</span>
-                  </div>
-                </div>
-                <div style="font-size:10px; color:#64748b; line-height:1.4;">
-                  ℹ️ 标定说明：1024px 检测分辨率、6 槽位在途并发以及切片压缩系数已在服务端完成高精标定锁定，无需手动修改，确保最强吞吐与零漏检。
                 </div>
               </div>
 
@@ -2123,6 +2099,31 @@
       });
     }
 
+    // ⚡ 激进切片预热即时开关 (无需等待)
+    const btnToggleEagerSlicing = shadow.getElementById('btn-toggle-eager-slicing');
+    if (btnToggleEagerSlicing) {
+      btnToggleEagerSlicing.addEventListener('click', async () => {
+        const cur = globalThis.ComicConfigStore?.getEagerSlicing ? ComicConfigStore.getEagerSlicing() : false;
+        const next = !cur;
+        if (globalThis.ComicConfigStore?.setEagerSlicing) {
+          await ComicConfigStore.setEagerSlicing(next);
+        }
+        if (next) {
+          btnToggleEagerSlicing.textContent = '🟢 已开启';
+          btnToggleEagerSlicing.style.borderColor = 'rgba(56, 189, 248, 0.4)';
+          btnToggleEagerSlicing.style.background = 'rgba(56, 189, 248, 0.2)';
+          btnToggleEagerSlicing.style.color = '#38bdf8';
+          showToast('🟢 激进切片预热已开启 (后续图片就绪即切)');
+        } else {
+          btnToggleEagerSlicing.textContent = '⚪ 已关闭';
+          btnToggleEagerSlicing.style.borderColor = 'rgba(148, 163, 184, 0.2)';
+          btnToggleEagerSlicing.style.background = '#334155';
+          btnToggleEagerSlicing.style.color = '#94a3b8';
+          showToast('⚪ 已关闭激进预热 (遵循视口按需触发)');
+        }
+      });
+    }
+
     // 🌟 手动唤起 Dev HUD 面板 (单次会话生效，默认不自启)
     const btnLaunchDev = shadow.getElementById('btn-launch-dev-hud');
     if (btnLaunchDev) {
@@ -2130,8 +2131,6 @@
         closeModal();
         if (globalThis.ComicDebugHUD?.openOnce) {
           globalThis.ComicDebugHUD.openOnce();
-        } else if (globalThis.ComicDebugHUD?.enable) {
-          globalThis.ComicDebugHUD.enable();
         }
         showToast('🚀 已在当前页面唤起 Dev 测试看板（单次生效）');
       });
@@ -2323,6 +2322,22 @@
           btnTogglePreview.style.borderColor = 'rgba(148, 163, 184, 0.2)';
           btnTogglePreview.style.background = '#334155';
           btnTogglePreview.style.color = '#94a3b8';
+        }
+      }
+
+      const btnToggleEagerSlicing = shadow.getElementById('btn-toggle-eager-slicing');
+      if (btnToggleEagerSlicing) {
+        const isEager = globalThis.ComicConfigStore?.getEagerSlicing ? ComicConfigStore.getEagerSlicing() : false;
+        if (isEager) {
+          btnToggleEagerSlicing.textContent = '🟢 已开启';
+          btnToggleEagerSlicing.style.borderColor = 'rgba(56, 189, 248, 0.4)';
+          btnToggleEagerSlicing.style.background = 'rgba(56, 189, 248, 0.2)';
+          btnToggleEagerSlicing.style.color = '#38bdf8';
+        } else {
+          btnToggleEagerSlicing.textContent = '⚪ 已关闭';
+          btnToggleEagerSlicing.style.borderColor = 'rgba(148, 163, 184, 0.2)';
+          btnToggleEagerSlicing.style.background = '#334155';
+          btnToggleEagerSlicing.style.color = '#94a3b8';
         }
       }
     } catch {}

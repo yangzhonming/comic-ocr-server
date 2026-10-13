@@ -59,8 +59,15 @@ async function handleOcrFetch(req) {
     fetchOptions.body = typeof jsonBody === 'string' ? jsonBody : JSON.stringify(jsonBody);
   }
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort(new Error('Background fetch timed out after 20s'));
+  }, 20000);
+  fetchOptions.signal = controller.signal;
+
   try {
     const res = await fetch(url, fetchOptions);
+    clearTimeout(timeoutId);
     const contentType = res.headers.get('content-type') || '';
     let data = null;
     let text = '';
@@ -78,6 +85,7 @@ async function handleOcrFetch(req) {
       text
     };
   } catch (err) {
+    clearTimeout(timeoutId);
     return {
       ok: false,
       status: 0,

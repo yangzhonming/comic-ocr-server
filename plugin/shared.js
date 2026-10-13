@@ -202,12 +202,51 @@
     const targetUrl = `${apiUrl.replace(/\/+$/, '')}/coordinates`;
     if (isLocalHttpUrl(targetUrl) && globalThis.chrome?.runtime?.sendMessage) {
       return new Promise((resolve, reject) => {
+        let timer = null;
+        let onAbort = null;
+        let settled = false;
+
+        const cleanup = () => {
+          if (timer) clearTimeout(timer);
+          if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+        };
+
+        if (signal?.aborted) {
+          const err = new Error('Aborted');
+          err.name = 'AbortError';
+          return reject(err);
+        }
+
+        if (signal) {
+          onAbort = () => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            const err = new Error('Aborted');
+            err.name = 'AbortError';
+            reject(err);
+          };
+          signal.addEventListener('abort', onAbort, { once: true });
+        }
+
+        timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          const err = new Error('Coordinates request timed out (15s)');
+          err.name = 'TimeoutError';
+          reject(err);
+        }, 15000);
+
         chrome.runtime.sendMessage({
           action: 'OCR_FETCH',
           url: targetUrl,
           method: 'POST',
           jsonBody
         }, response => {
+          if (settled) return;
+          settled = true;
+          cleanup();
           if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
           if (!response || !response.ok) return reject(new Error(response?.error || `HTTP ${response?.status}`));
           resolve(response.data || {});
@@ -235,6 +274,42 @@
       });
 
       return new Promise((resolve, reject) => {
+        let timer = null;
+        let onAbort = null;
+        let settled = false;
+
+        const cleanup = () => {
+          if (timer) clearTimeout(timer);
+          if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+        };
+
+        if (signal?.aborted) {
+          const err = new Error('Aborted');
+          err.name = 'AbortError';
+          return reject(err);
+        }
+
+        if (signal) {
+          onAbort = () => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            const err = new Error('Aborted');
+            err.name = 'AbortError';
+            reject(err);
+          };
+          signal.addEventListener('abort', onAbort, { once: true });
+        }
+
+        timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          const err = new Error('OCR slice request timed out (18s)');
+          err.name = 'TimeoutError';
+          reject(err);
+        }, 18000);
+
         chrome.runtime.sendMessage({
           action: 'OCR_FETCH',
           url: targetUrl,
@@ -257,7 +332,9 @@
             lang: String(lang || 'kr'),
             det_thresh: String(detThresh || '0.30'),
             det_box_thresh: String(detBoxThresh || '0.50'),
-            rec_score: String(recScore || '0.60')
+            box_thresh: String(detBoxThresh || '0.50'),
+            rec_score: String(recScore || '0.60'),
+            rec_thresh: String(recScore || '0.60')
           },
           file: {
             name: `${sliceName}.jpg`,
@@ -265,6 +342,9 @@
             base64: base64Data
           }
         }, response => {
+          if (settled) return;
+          settled = true;
+          cleanup();
           if (chrome.runtime.lastError) {
             return reject(new Error(chrome.runtime.lastError.message));
           }
@@ -298,7 +378,9 @@
     form.append("lang", lang);
     form.append("det_thresh", detThresh);
     form.append("det_box_thresh", detBoxThresh);
+    form.append("box_thresh", detBoxThresh);
     form.append("rec_score", recScore);
+    form.append("rec_thresh", recScore);
 
     const response = await fetch(targetUrl, { method: "POST", body: form, signal });
     const result = await response.json().catch(() => ({}));

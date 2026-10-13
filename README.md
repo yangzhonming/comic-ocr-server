@@ -1,5 +1,7 @@
 # ComicFlow / ComicOCR - 现代化长漫实时流式汉化全栈系统 (Cloud & Mobile Edge Dual-Engine)
 
+> 📖 **完整技术文档**：详细系统架构设计、算法实现、部署与使用指南请参阅 [《中文架构与部署指南》](docs/ARCHITECTURE.zh-CN.md) | [《English Architecture & Deployment Guide》](docs/ARCHITECTURE.en.md)。
+
 > 🚀 **端云双擎 · 手机本地极速 OCR 引擎 (ComicOCR v1.0.3) + 云端 Serverless 容器服务 + 沉浸式长漫汉化插件 (v1.0.1)**
 >
 > 本项目是一套面向现代化 Web 漫画阅读的深度优化智能识别与汉化系统。系统支持**“端侧感知与裁切 + 手机端侧/云端双擎 OCR 识别 + 前端直连大语言模型流式回填”**的全链路闭环：
