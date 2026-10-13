@@ -86,7 +86,7 @@ flowchart TD
         DeepSeek["DeepSeek-V3 / Flash (流式 SSE)"]
     end
 
-    LLMClient <==>|"HTTPS 流式长连接 (stream=true)"| DeepSeek
+    LLMClient ==>|"HTTPS 流式长连接 (stream=true)"| DeepSeek
 ```
 
 ---

@@ -56,7 +56,7 @@ flowchart TD
         Router -->|"本地模式 (127.0.0.1:8080)"| NetBridge["扩展后台脚本转发 (处理 PNA 限制)"]
         Router -->|"云端模式 (HTTPS)"| CloudAPI["直接 Fetch 发起请求"]
         
-        PatchRenderer["原生 DOM 补丁渲染"] <-- RecJSON["气泡文本、坐标与样式数据"]
+        RecJSON["气泡文本、坐标与样式数据"] --> PatchRenderer["原生 DOM 补丁渲染"]
         PatchRenderer --> LLMClient["流式翻译调度器 (首片优先 + 聚合队列)"]
         LLMClient -.->|"逐行解构回填"| PatchUpdater["动态文字排版重绘"]
     end
@@ -81,7 +81,7 @@ flowchart TD
     end
 
     subgraph LLMCloud ["大语言模型服务 (DeepSeek / OpenAI 兼容接口)"]
-        LLMClient <==>|"SSE 长连接流式传输"| LLMCloud
+        LLMClient ==>|"SSE 长连接流式传输"| LLMCloud
     end
 ```
 

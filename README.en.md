@@ -46,7 +46,7 @@ flowchart TD
         Router -->|"Mode A: Local Engine (:8080)"| NetBridge["Background Worker Relay (PNA Bypass)"]
         Router -->|"Mode B: Cloud Engine (HTTPS)"| CloudAPI["Direct Fetch API"]
         
-        PatchRenderer["DOM Native Patch Renderer"] <-- RecJSON["Bubble Coordinates, Text & Styles"]
+        RecJSON["Bubble Coordinates, Text & Styles"] --> PatchRenderer["DOM Native Patch Renderer"]
         PatchRenderer --> LLMClient["Streaming Translation Dispatcher (First-Slice Eager + Queue)"]
         LLMClient -.->|"Per-Line Parsing"| PatchUpdater["Dynamic Font & Layout Reflow"]
     end
@@ -71,7 +71,7 @@ flowchart TD
     end
 
     subgraph LLMCloud ["Large Language Model Services (DeepSeek / OpenAI Compatible)"]
-        LLMClient <==>|"SSE Streaming Connection"| LLMCloud
+        LLMClient ==>|"SSE Streaming Connection"| LLMCloud
     end
 ```
 
