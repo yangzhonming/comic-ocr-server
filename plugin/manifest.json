@@ -5,9 +5,19 @@
   "description": "长漫阅读器汉化插件：支持气泡紧致贴合、OCR灵敏度动态微调（敏锐/标准/纯净）、可编辑本地与云端端点、支持单机硬件加速与云端Serverless双模部署。",
   "permissions": ["activeTab", "storage", "declarativeNetRequest"],
   "host_permissions": ["<all_urls>", "http://127.0.0.1:*/*", "http://127.0.0.1:8080/*", "http://localhost:*/*"],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "action": {
-    "default_title": "漫画页面识别",
-    "default_popup": "popup.html"
+    "default_title": "ComicTranslate 漫画切片与智能汉化",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
   },
   "background": {
     "service_worker": "background.js"

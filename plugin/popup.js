@@ -14,29 +14,47 @@ function scopeLabel(scope) {
     legacyPage: '当前完整 URL（旧规则）', legacyChapter: '同一作品章节（旧规则）' })[scope] || '当前页面';
 }
 
+const indicator = document.getElementById('status-indicator');
+
 function display(state) {
   current = state;
   primary.hidden = false;
   primary.disabled = false;
   const scopeText = scopeLabel(state.override?.scope);
+  
+  if (indicator) {
+    indicator.className = 'status-indicator';
+    if (state.override?.value === 'block') {
+      indicator.classList.add('block');
+    } else if (state.kind === 'yes') {
+      indicator.classList.add('yes');
+    } else if (state.kind === 'pending' || state.kind === 'loading') {
+      indicator.classList.add('pending');
+    }
+  }
+
   if (state.override?.value === 'block') {
     statusNode.textContent = '本页已关闭';
     detailNode.textContent = `黑名单作用于${scopeText}。`;
     primary.textContent = '移出黑名单';
+    primary.classList.remove('block-mode');
   } else if (state.override?.value === 'allow') {
     statusNode.textContent = state.kind === 'yes' ? '本页已识别为漫画页' : '豁免规则已保存';
     detailNode.textContent = state.kind === 'yes'
       ? `豁免名单覆盖${scopeText}。${state.reason}`
       : `豁免名单覆盖${scopeText}；本页仍需符合漫画路径及图片布局条件。`;
     primary.textContent = '移出豁免名单';
+    primary.classList.remove('block-mode');
   } else if (state.kind === 'yes') {
     statusNode.textContent = '已识别为漫画页';
     detailNode.textContent = state.reason;
     primary.textContent = '此页不是漫画 · 加入黑名单';
+    primary.classList.add('block-mode');
   } else {
     statusNode.textContent = state.kind === 'pending' || state.kind === 'loading' ? '正在等待页面图片' : '未识别为漫画页';
     detailNode.textContent = state.reason || '可以手动将当前 URL 加入豁免名单。';
     primary.textContent = '此页是漫画 · 加入豁免名单';
+    primary.classList.remove('block-mode');
   }
   const nextValue = state.kind === 'yes' ? 'block' : 'allow';
   const inferred = preferredRule(state.url, nextValue);

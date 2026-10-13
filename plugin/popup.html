@@ -3,17 +3,57 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>漫画页面识别</title>
+  <title>ComicTranslate 漫画切片与智能汉化</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <main>
-    <h1>漫画页面识别</h1>
-    <p id="status" class="status" role="status">正在读取当前页面…</p>
-    <p id="detail" class="detail"></p>
-    <button id="primary" type="button" hidden></button>
-    <p id="scope" class="scope"></p>
-  </main>
+  <div class="popup-container">
+    <!-- Header -->
+    <header class="header">
+      <div class="brand">
+        <img class="logo" src="icons/icon48.png" alt="ComicTranslate Logo">
+        <div class="brand-info">
+          <h1 class="brand-title">ComicTranslate</h1>
+          <span class="brand-subtitle">端云双擎智能汉化</span>
+        </div>
+      </div>
+      <span class="version-badge">v1.0.4</span>
+    </header>
+
+    <!-- Main Card -->
+    <main class="main-card">
+      <div class="status-row">
+        <span class="status-indicator" id="status-indicator"></span>
+        <h2 id="status" class="status-text" role="status">正在读取当前页面…</h2>
+      </div>
+      <p id="detail" class="detail-text">正在分析页面 DOM 与长条漫画图片布局证据...</p>
+
+      <button id="primary" type="button" class="btn-primary" hidden>
+        <span id="primary-text">操作中...</span>
+      </button>
+
+      <div class="scope-box" id="scope-wrapper">
+        <div class="scope-header">
+          <svg class="scope-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="2" y1="12" x2="22" y2="12"></line>
+            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+          </svg>
+          <span class="scope-title">规则作用域</span>
+        </div>
+        <p id="scope" class="scope-text"></p>
+      </div>
+    </main>
+
+    <!-- Quick Footer Tip -->
+    <footer class="footer">
+      <div class="tip-row">
+        <span class="tip-icon">💡</span>
+        <span class="tip-text">长按页面悬浮球呼出菜单，单击直接启停</span>
+      </div>
+    </footer>
+  </div>
+
   <script src="shared.js"></script>
   <script src="store.js"></script>
   <script src="popup.js"></script>
