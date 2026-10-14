@@ -1013,14 +1013,14 @@
 
                 <div style="display:flex; flex-direction:column; gap:10px;">
                   <!-- 路由 1: 本地硬件加速 -->
-                  <div id="ocr-route-card-local" style="padding:10px; border-radius:8px; background:rgba(46,213,115,0.05); border:1px solid rgba(46,213,115,0.3); display:flex; flex-direction:column; gap:6px;">
-                    <label style="display:flex; justify-content:space-between; align-items:center; cursor:pointer;">
+                  <div id="ocr-route-card-local" style="padding:10px; border-radius:8px; background:rgba(46,213,115,0.05); border:1px solid rgba(46,213,115,0.3); display:flex; flex-direction:column; gap:6px; cursor:pointer; transition:all 0.15s ease;">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
                       <div style="display:flex; align-items:center; gap:8px;">
-                        <input type="radio" name="modal-ocr-mode" value="local" id="radio-mode-local" style="accent-color:#2ed573;" checked>
-                        <span style="font-size:12px; font-weight:700; color:#2ed573;">📱 手机端本地硬件加速 (推荐·端侧硬件推理)</span>
+                        <input type="radio" name="modal-ocr-mode" value="local" id="radio-mode-local" style="accent-color:#2ed573; cursor:pointer;" checked>
+                        <span id="label-title-local" style="font-size:12px; font-weight:700; color:#2ed573;">📱 手机端本地硬件加速 (推荐·端侧硬件推理)</span>
                       </div>
                       <span style="font-size:10px; color:#2ed573; background:rgba(46,213,115,0.15); padding:1px 6px; border-radius:4px; font-family:monospace;">免流零延迟</span>
-                    </label>
+                    </div>
 
                     <div style="padding-top:4px;">
                       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
@@ -1035,14 +1035,14 @@
                   </div>
 
                   <!-- 路由 2: 云端 Serverless / 自建服务器 -->
-                  <div id="ocr-route-card-cloud" style="padding:10px; border-radius:8px; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.08); display:flex; flex-direction:column; gap:6px;">
-                    <label style="display:flex; justify-content:space-between; align-items:center; cursor:pointer;">
+                  <div id="ocr-route-card-cloud" style="padding:10px; border-radius:8px; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.08); display:flex; flex-direction:column; gap:6px; cursor:pointer; transition:all 0.15s ease;">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
                       <div style="display:flex; align-items:center; gap:8px;">
-                        <input type="radio" name="modal-ocr-mode" value="cloud" id="radio-mode-cloud" style="accent-color:#2ed573;">
-                        <span style="font-size:12px; font-weight:700; color:#cbd5e1;">☁️ 云端 Serverless / 自建 Docker 服务</span>
+                        <input type="radio" name="modal-ocr-mode" value="cloud" id="radio-mode-cloud" style="accent-color:#2ed573; cursor:pointer;">
+                        <span id="label-title-cloud" style="font-size:12px; font-weight:700; color:#cbd5e1;">☁️ 云端 Serverless / 自建 Docker 服务</span>
                       </div>
                       <span style="font-size:10px; color:#64748b; font-family:monospace;">远程备用</span>
-                    </label>
+                    </div>
 
                     <div style="padding-top:4px;">
                       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
@@ -1117,25 +1117,25 @@
                   <span style="font-size:9px; color:#94a3b8;">即时生效</span>
                 </div>
                 <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
-                  <div style="display:flex; flex-direction:column;">
+                  <div style="display:flex; flex-direction:column; flex:1; min-width:0;">
                     <span style="font-size:12px; font-weight:600; color:#f8fafc;">切片辅助线与切线</span>
                     <span style="font-size:10px; color:#94a3b8; margin-top:1px;">在漫画图层上实时绘制落刀切线与坐标分布</span>
                   </div>
-                  <button id="btn-toggle-preview" class="btn-toggle" style="padding:4px 10px; border-radius:6px; font-size:11px; font-weight:600; cursor:pointer; border:1px solid rgba(148, 163, 184, 0.2); background:#334155; color:#94a3b8; transition:all 0.15s;">⚪ 已关闭</button>
+                  <button id="btn-toggle-preview" class="btn-toggle" style="width:78px; flex-shrink:0; text-align:center; padding:4px 0; border-radius:6px; font-size:11px; font-weight:600; cursor:pointer; border:1px solid rgba(148, 163, 184, 0.2); background:#334155; color:#94a3b8; transition:all 0.15s;">⚪ 已关闭</button>
                 </div>
                 <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:4px;">
-                  <div style="display:flex; flex-direction:column;">
-                    <span style="font-size:12px; font-weight:600; color:#f8fafc;">⚡ 激进切片预热 (无需等待)</span>
-                    <span style="font-size:10px; color:#94a3b8; margin-top:1px;">后续图片就绪时提前批量切片送检，无需等待视口滑动触碰。默认关闭（更省流量与设备算力）</span>
+                  <div style="display:flex; flex-direction:column; flex:1; min-width:0;">
+                    <span style="font-size:12px; font-weight:600; color:#f8fafc;">⚡ 激进切片预热</span>
+                    <span style="font-size:10px; color:#94a3b8; margin-top:1px;">图片就绪提前切片送检，无需等待视口滑入</span>
                   </div>
-                  <button id="btn-toggle-eager-slicing" class="btn-toggle" style="padding:4px 10px; border-radius:6px; font-size:11px; font-weight:600; cursor:pointer; border:1px solid rgba(148, 163, 184, 0.2); background:#334155; color:#94a3b8; transition:all 0.15s;">⚪ 已关闭</button>
+                  <button id="btn-toggle-eager-slicing" class="btn-toggle" style="width:78px; flex-shrink:0; text-align:center; padding:4px 0; border-radius:6px; font-size:11px; font-weight:600; cursor:pointer; border:1px solid rgba(148, 163, 184, 0.2); background:#334155; color:#94a3b8; transition:all 0.15s;">⚪ 已关闭</button>
                 </div>
                 <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:4px;">
-                  <div style="display:flex; flex-direction:column;">
+                  <div style="display:flex; flex-direction:column; flex:1; min-width:0;">
                     <span style="font-size:12px; font-weight:600; color:#f8fafc;">开启 Dev 测试看版</span>
-                    <span style="font-size:10px; color:#94a3b8; margin-top:1px;">单次会话浮窗，默认不开启，刷新或切换页面自动关闭</span>
+                    <span style="font-size:10px; color:#94a3b8; margin-top:1px;">单次会话浮窗，页面刷新或切换后自动关闭</span>
                   </div>
-                  <button id="btn-launch-dev-hud" style="background:rgba(14,165,233,0.2); border:1px solid #38bdf8; color:#38bdf8; padding:5px 12px; border-radius:6px; font-size:11px; font-weight:700; cursor:pointer; transition:all 0.15s;">🚀 唤起看板</button>
+                  <button id="btn-launch-dev-hud" style="width:78px; flex-shrink:0; text-align:center; background:rgba(14,165,233,0.2); border:1px solid #38bdf8; color:#38bdf8; padding:5px 0; border-radius:6px; font-size:11px; font-weight:700; cursor:pointer; transition:all 0.15s;">🚀 唤起看板</button>
                 </div>
               </div>
 
@@ -1641,13 +1641,17 @@
   function updateOcrRouteCards(isLocal) {
     const cardLocal = shadow.getElementById('ocr-route-card-local');
     const cardCloud = shadow.getElementById('ocr-route-card-cloud');
+    const titleLocal = shadow.getElementById('label-title-local');
+    const titleCloud = shadow.getElementById('label-title-cloud');
     if (cardLocal) {
-      cardLocal.style.background = isLocal ? 'rgba(46, 213, 115, 0.05)' : 'rgba(255, 255, 255, 0.02)';
-      cardLocal.style.borderColor = isLocal ? 'rgba(46, 213, 115, 0.3)' : 'rgba(255, 255, 255, 0.08)';
+      cardLocal.style.background = isLocal ? 'rgba(46, 213, 115, 0.08)' : 'rgba(255, 255, 255, 0.02)';
+      cardLocal.style.borderColor = isLocal ? 'rgba(46, 213, 115, 0.4)' : 'rgba(255, 255, 255, 0.08)';
+      if (titleLocal) titleLocal.style.color = isLocal ? '#2ed573' : '#94a3b8';
     }
     if (cardCloud) {
       cardCloud.style.background = isLocal ? 'rgba(255, 255, 255, 0.02)' : 'rgba(56, 189, 248, 0.08)';
-      cardCloud.style.borderColor = isLocal ? 'rgba(255, 255, 255, 0.08)' : 'rgba(56, 189, 248, 0.35)';
+      cardCloud.style.borderColor = isLocal ? 'rgba(255, 255, 255, 0.08)' : 'rgba(56, 189, 248, 0.4)';
+      if (titleCloud) titleCloud.style.color = isLocal ? '#94a3b8' : '#38bdf8';
     }
   }
 
@@ -1781,22 +1785,41 @@
 
     const radLocal = shadow.getElementById('radio-mode-local');
     const radCloud = shadow.getElementById('radio-mode-cloud');
-    if (radLocal && radCloud) {
-      radLocal.addEventListener('change', () => {
-        updateOcrRouteCards(true);
-        if (globalThis.ComicConfigStore?.setUseLocalBackend) {
-          void ComicConfigStore.setUseLocalBackend(true);
-        }
-        showToast('📱 已切换为手机端本地硬件加速');
-      });
-      radCloud.addEventListener('change', () => {
-        updateOcrRouteCards(false);
-        if (globalThis.ComicConfigStore?.setUseLocalBackend) {
-          void ComicConfigStore.setUseLocalBackend(false);
-        }
-        showToast('☁️ 已切换为云端 Serverless / 自建 Docker 服务');
+    const cardLocal = shadow.getElementById('ocr-route-card-local');
+    const cardCloud = shadow.getElementById('ocr-route-card-cloud');
+
+    function selectOcrRoute(isLocal, notify = true) {
+      if (radLocal) radLocal.checked = isLocal;
+      if (radCloud) radCloud.checked = !isLocal;
+      updateOcrRouteCards(isLocal);
+      if (globalThis.ComicConfigStore?.setUseLocalBackend) {
+        void ComicConfigStore.setUseLocalBackend(isLocal);
+      }
+      try {
+        localStorage.setItem('comic_dev_enable_capture', isLocal ? '1' : '0');
+      } catch {}
+      if (notify) {
+        showToast(isLocal ? '📱 已切换为手机端本地硬件加速' : '☁️ 已切换为云端 Serverless / 自建 Docker 服务');
+      }
+    }
+
+    if (cardLocal) {
+      cardLocal.addEventListener('click', (e) => {
+        const isResetBtn = Boolean(e.target.closest('#btn-reset-local-url'));
+        const alreadyChecked = radLocal?.checked;
+        selectOcrRoute(true, !alreadyChecked && !isResetBtn);
       });
     }
+
+    if (cardCloud) {
+      cardCloud.addEventListener('click', () => {
+        const alreadyChecked = radCloud?.checked;
+        selectOcrRoute(false, !alreadyChecked);
+      });
+    }
+
+    radLocal?.addEventListener('change', () => selectOcrRoute(true, true));
+    radCloud?.addEventListener('change', () => selectOcrRoute(false, true));
 
     const btnResetLocal = shadow.getElementById('btn-reset-local-url');
     const inputLocalUrl = shadow.getElementById('modal-ocr-local-url');
