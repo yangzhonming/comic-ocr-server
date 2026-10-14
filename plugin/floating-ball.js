@@ -2,8 +2,9 @@
   // 漫画阅读器控制核心 (移动端与桌面端双适配)
   // 包含：左上角悬浮球、老版195px经典菜单、通用自适应配置Modal弹窗、错误捕获与Dev HUD联动
   const SIZE = 48;
-  const INSET = 10;
-  const SAFE_TOP = 16;
+  const INSET = 16;
+  const SAFE_TOP = 48;
+  const SAFE_LEFT = 16;
   let host = null;
   let shadow = null;
   let button = null;
@@ -15,6 +16,11 @@
   let frame = 0;
   let resizeObserver = null;
   let hasFirstTranslation = false;
+  let userCustomPos = null;
+  try {
+    const savedPos = typeof localStorage !== 'undefined' ? localStorage.getItem('comic_floating_ball_pos') : null;
+    if (savedPos) userCustomPos = JSON.parse(savedPos);
+  } catch {}
 
   // ========================================================
   // 1. 错误捕获追踪器 (全局可用)
@@ -769,12 +775,14 @@
           background: rgba(255, 255, 255, 0.03);
           border: 1px solid rgba(255, 255, 255, 0.1);
           border-radius: 8px;
-          padding: 8px 6px;
-          text-align: left;
+          padding: 8px 4px;
+          text-align: center;
           cursor: pointer;
           transition: all 0.15s ease;
           display: flex;
           flex-direction: column;
+          align-items: center;
+          justify-content: center;
           gap: 2px;
         }
         .ocr-mode-btn:hover {
@@ -884,6 +892,13 @@
           </div>
           <span style="font-size:11px; color:#64748b;">›</span>
         </div>
+
+        <div class="divider"></div>
+
+        <!-- 4. 复位悬浮球位置 -->
+        <div class="manga-ui-item" id="btn-reset-ball-pos" style="color:#64748b; font-size:11px; padding:5px 9px;">
+          <span>📍 复位悬浮球位置</span>
+        </div>
       </div>
 
       <!-- 通用自适应设置弹框 (Modal) -->
@@ -934,32 +949,20 @@
                 <div class="ocr-modes-grid">
                   <!-- 1. 敏锐 -->
                   <div class="ocr-mode-btn" id="btn-ocr-sensitive" data-mode="sensitive">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                      <span style="font-size:11px; font-weight:700; color:#2ed573;">🟢 敏锐模式</span>
-                      <span style="font-family:monospace; font-size:10px; color:#2ed573; font-weight:700;">0.50</span>
-                    </div>
-                    <div style="font-size:10px; color:#94a3b8; margin-top:2px;">防漏对白 / 高召回</div>
-                    <div style="font-size:9px; color:#6ee7b7; margin-top:2px;">手写涂鸦/暗底字</div>
+                    <span style="font-size:11px; font-weight:700; color:#2ed573;">🟢 敏锐 (0.50)</span>
+                    <span style="font-size:10px; color:#94a3b8; margin-top:2px;">防漏 · 高召回</span>
                   </div>
 
-                  <!-- 2. 标准平衡 -->
+                  <!-- 2. 标准 -->
                   <div class="ocr-mode-btn" id="btn-ocr-balanced" data-mode="balanced">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                      <span style="font-size:11px; font-weight:700; color:#fbbf24;">🟡 标准平衡</span>
-                      <span style="font-family:monospace; font-size:10px; color:#fbbf24; font-weight:700;">0.70</span>
-                    </div>
-                    <div style="font-size:10px; color:#94a3b8; margin-top:2px;">默认推荐 / 均衡</div>
-                    <div style="font-size:9px; color:#94a3b8; margin-top:2px;">常规白底黑字</div>
+                    <span style="font-size:11px; font-weight:700; color:#fbbf24;">🟡 标准 (0.70)</span>
+                    <span style="font-size:10px; color:#94a3b8; margin-top:2px;">推荐 · 均衡</span>
                   </div>
 
                   <!-- 3. 纯净 -->
                   <div class="ocr-mode-btn" id="btn-ocr-strict" data-mode="strict">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                      <span style="font-size:11px; font-weight:700; color:#f87171;">🔴 纯净模式</span>
-                      <span style="font-family:monospace; font-size:10px; color:#f87171; font-weight:700;">0.82</span>
-                    </div>
-                    <div style="font-size:10px; color:#94a3b8; margin-top:2px;">抗网点 / 拒水印</div>
-                    <div style="font-size:9px; color:#94a3b8; margin-top:2px;">仅留高置信气泡</div>
+                    <span style="font-size:11px; font-weight:700; color:#f87171;">🔴 纯净 (0.82)</span>
+                    <span style="font-size:10px; color:#94a3b8; margin-top:2px;">抗噪 · 保真</span>
                   </div>
                 </div>
 
@@ -1239,6 +1242,11 @@
   function setupBallInteractions() {
     let pressTimer = null;
     let isLongPress = false;
+    let isDragging = false;
+    let startX = 0;
+    let startY = 0;
+    let initialLeft = 0;
+    let initialTop = 0;
 
     function updateVisual() {
       const lang = getStoredLang();
@@ -1271,23 +1279,82 @@
     button.addEventListener('pointerdown', (e) => {
       if (e.button !== undefined && e.button !== 0) return;
       isLongPress = false;
+      isDragging = false;
+      startX = e.clientX || 0;
+      startY = e.clientY || 0;
+      initialLeft = parseFloat(host.style.left) || SAFE_LEFT;
+      initialTop = parseFloat(host.style.top) || SAFE_TOP;
+
+      try {
+        button.setPointerCapture?.(e.pointerId);
+      } catch {}
+
       pressTimer = setTimeout(() => {
-        isLongPress = true;
-        // 长按 0.5 秒：静默呼出 / 关闭菜单
-        if (menu.hasAttribute('hidden')) {
-          openMenu();
-        } else {
-          closeMenu();
+        if (!isDragging) {
+          isLongPress = true;
+          // 长按 0.5 秒：呼出 / 关闭菜单
+          if (menu.hasAttribute('hidden')) {
+            openMenu();
+          } else {
+            closeMenu();
+          }
         }
       }, 500);
     });
 
-    button.addEventListener('pointerup', () => {
+    button.addEventListener('pointermove', (e) => {
+      const dx = (e.clientX || 0) - startX;
+      const dy = (e.clientY || 0) - startY;
+
+      if (!isDragging && Math.hypot(dx, dy) > 8) {
+        isDragging = true;
+        if (pressTimer) {
+          clearTimeout(pressTimer);
+          pressTimer = null;
+        }
+      }
+
+      if (isDragging) {
+        const winW = (typeof window !== 'undefined' ? window.innerWidth : 1200) || 1200;
+        const winH = (typeof window !== 'undefined' ? window.innerHeight : 800) || 800;
+        const minX = 8;
+        const maxX = Math.max(minX, winW - SIZE - 8);
+        const minY = 24;
+        const maxY = Math.max(minY, winH - SIZE - 24);
+
+        const nextX = Math.max(minX, Math.min(maxX, initialLeft + dx));
+        const nextY = Math.max(minY, Math.min(maxY, initialTop + dy));
+
+        host.style.left = `${Math.round(nextX)}px`;
+        host.style.top = `${Math.round(nextY)}px`;
+      }
+    });
+
+    button.addEventListener('pointerup', (e) => {
+      try {
+        button.releasePointerCapture?.(e.pointerId);
+      } catch {}
+
       if (pressTimer) {
         clearTimeout(pressTimer);
         pressTimer = null;
       }
-      // 短按：如果菜单开着，短按关闭；如果菜单没开，短按直接启停翻译！(老版本灵魂)
+
+      if (isDragging) {
+        isDragging = false;
+        userCustomPos = {
+          x: parseFloat(host.style.left) || SAFE_LEFT,
+          y: parseFloat(host.style.top) || SAFE_TOP
+        };
+        try {
+          if (typeof localStorage !== 'undefined') {
+            localStorage.setItem('comic_floating_ball_pos', JSON.stringify(userCustomPos));
+          }
+        } catch {}
+        return; // 拖拽结束不触发点击启停
+      }
+
+      // 短按：如果菜单开着，短按关闭；如果菜单没开，短按直接启停翻译！
       if (!isLongPress) {
         if (!menu.hasAttribute('hidden')) {
           closeMenu();
@@ -1298,11 +1365,15 @@
       }
     });
 
-    button.addEventListener('pointercancel', () => {
+    button.addEventListener('pointercancel', (e) => {
+      try {
+        button.releasePointerCapture?.(e.pointerId);
+      } catch {}
       if (pressTimer) {
         clearTimeout(pressTimer);
         pressTimer = null;
       }
+      isDragging = false;
     });
 
     // 悬停/触碰时临时恢复全不透明
@@ -1322,6 +1393,30 @@
     button.classList.remove('stealth');
     renderMenuModelList();
     updateErrorBadge();
+
+    // 智能防溢出：靠右则向左展开，靠底则向上展开
+    try {
+      const hostLeft = parseFloat(host.style.left) || 0;
+      const hostTop = parseFloat(host.style.top) || 0;
+      const winW = (typeof window !== 'undefined' ? window.innerWidth : 1200) || 1200;
+      const winH = (typeof window !== 'undefined' ? window.innerHeight : 800) || 800;
+
+      if (hostLeft + 195 > winW) {
+        menu.style.left = 'auto';
+        menu.style.right = '0px';
+      } else {
+        menu.style.left = '0px';
+        menu.style.right = 'auto';
+      }
+
+      if (hostTop + 320 > winH) {
+        menu.style.top = 'auto';
+        menu.style.bottom = `${SIZE + 8}px`;
+      } else {
+        menu.style.top = `${SIZE + 8}px`;
+        menu.style.bottom = 'auto';
+      }
+    } catch {}
   }
 
   function closeMenu() {
@@ -1359,6 +1454,19 @@
     shadow.getElementById('btn-open-settings').addEventListener('click', () => {
       closeMenu();
       openModal();
+    });
+
+    // 悬浮球复位位置
+    shadow.getElementById('btn-reset-ball-pos')?.addEventListener('click', () => {
+      userCustomPos = null;
+      try {
+        if (typeof localStorage !== 'undefined') {
+          localStorage.removeItem('comic_floating_ball_pos');
+        }
+      } catch {}
+      closeMenu();
+      layout();
+      showToast('📍 悬浮球已复位至左上角安全区域');
     });
   }
 
@@ -2626,6 +2734,22 @@
       if (host) setVisible(false);
       return;
     }
+
+    if (userCustomPos && typeof userCustomPos.x === 'number' && typeof userCustomPos.y === 'number') {
+      const winW = (typeof window !== 'undefined' ? window.innerWidth : 1200) || 1200;
+      const winH = (typeof window !== 'undefined' ? window.innerHeight : 800) || 800;
+      const minX = 8;
+      const maxX = Math.max(minX, winW - SIZE - 8);
+      const minY = 24;
+      const maxY = Math.max(minY, winH - SIZE - 24);
+      const clampedX = Math.max(minX, Math.min(maxX, userCustomPos.x));
+      const clampedY = Math.max(minY, Math.min(maxY, userCustomPos.y));
+      host.style.left = `${Math.round(clampedX)}px`;
+      host.style.top = `${Math.round(clampedY)}px`;
+      setVisible(true);
+      return;
+    }
+
     const isRunning = captureStatus.running || captureStatus.starting;
     const first = reader.firstImage.getBoundingClientRect();
     const rootRect = reader.root.getBoundingClientRect();
@@ -2684,7 +2808,7 @@
     const clip = clipBounds(reader.root || reader.firstImage);
     const safeTop = Math.max(SAFE_TOP, clip.top + INSET);
     const safeBottom = Math.min(innerHeight - INSET, clip.bottom - INSET);
-    const safeLeft = Math.max(INSET, clip.left + INSET);
+    const safeLeft = Math.max(SAFE_LEFT, clip.left + INSET);
     const safeRight = Math.min(innerWidth - INSET, clip.right - INSET);
 
     if (!isRunning) {

@@ -78,19 +78,19 @@ ball.update(null);
 assert.equal(host, null);
 ball.update(reader);
 flush();
-assert.equal(host.style.left, '300px');
-assert.equal(host.style.top, '310px');
+assert.equal(host.style.left, '306px');
+assert.equal(host.style.top, '316px');
 assert.equal(host.style.display, 'block');
 assert.match(host.style.cssText, /position:fixed/);
 
 firstTop = 250;
 docEvents.scroll();
 flush();
-assert.equal(host.style.top, '260px');
+assert.equal(host.style.top, '266px');
 firstTop = -100;
 docEvents.scroll();
 flush();
-assert.equal(host.style.top, '16px');
+assert.equal(host.style.top, '48px');
 
 lastBottom = 0;
 docEvents.scroll();
