@@ -16,11 +16,6 @@
   let frame = 0;
   let resizeObserver = null;
   let hasFirstTranslation = false;
-  let userCustomPos = null;
-  try {
-    const savedPos = typeof localStorage !== 'undefined' ? localStorage.getItem('comic_floating_ball_pos') : null;
-    if (savedPos) userCustomPos = JSON.parse(savedPos);
-  } catch {}
 
   // ========================================================
   // 1. 错误捕获追踪器 (全局可用)
@@ -892,13 +887,6 @@
           </div>
           <span style="font-size:11px; color:#64748b;">›</span>
         </div>
-
-        <div class="divider"></div>
-
-        <!-- 4. 复位悬浮球位置 -->
-        <div class="manga-ui-item" id="btn-reset-ball-pos" style="color:#64748b; font-size:11px; padding:5px 9px;">
-          <span>📍 复位悬浮球位置</span>
-        </div>
       </div>
 
       <!-- 通用自适应设置弹框 (Modal) -->
@@ -1242,11 +1230,6 @@
   function setupBallInteractions() {
     let pressTimer = null;
     let isLongPress = false;
-    let isDragging = false;
-    let startX = 0;
-    let startY = 0;
-    let initialLeft = 0;
-    let initialTop = 0;
 
     function updateVisual() {
       const lang = getStoredLang();
@@ -1279,82 +1262,23 @@
     button.addEventListener('pointerdown', (e) => {
       if (e.button !== undefined && e.button !== 0) return;
       isLongPress = false;
-      isDragging = false;
-      startX = e.clientX || 0;
-      startY = e.clientY || 0;
-      initialLeft = parseFloat(host.style.left) || SAFE_LEFT;
-      initialTop = parseFloat(host.style.top) || SAFE_TOP;
-
-      try {
-        button.setPointerCapture?.(e.pointerId);
-      } catch {}
-
       pressTimer = setTimeout(() => {
-        if (!isDragging) {
-          isLongPress = true;
-          // 长按 0.5 秒：呼出 / 关闭菜单
-          if (menu.hasAttribute('hidden')) {
-            openMenu();
-          } else {
-            closeMenu();
-          }
+        isLongPress = true;
+        // 长按 0.5 秒：静默呼出 / 关闭菜单
+        if (menu.hasAttribute('hidden')) {
+          openMenu();
+        } else {
+          closeMenu();
         }
       }, 500);
     });
 
-    button.addEventListener('pointermove', (e) => {
-      const dx = (e.clientX || 0) - startX;
-      const dy = (e.clientY || 0) - startY;
-
-      if (!isDragging && Math.hypot(dx, dy) > 8) {
-        isDragging = true;
-        if (pressTimer) {
-          clearTimeout(pressTimer);
-          pressTimer = null;
-        }
-      }
-
-      if (isDragging) {
-        const winW = (typeof window !== 'undefined' ? window.innerWidth : 1200) || 1200;
-        const winH = (typeof window !== 'undefined' ? window.innerHeight : 800) || 800;
-        const minX = 8;
-        const maxX = Math.max(minX, winW - SIZE - 8);
-        const minY = 24;
-        const maxY = Math.max(minY, winH - SIZE - 24);
-
-        const nextX = Math.max(minX, Math.min(maxX, initialLeft + dx));
-        const nextY = Math.max(minY, Math.min(maxY, initialTop + dy));
-
-        host.style.left = `${Math.round(nextX)}px`;
-        host.style.top = `${Math.round(nextY)}px`;
-      }
-    });
-
-    button.addEventListener('pointerup', (e) => {
-      try {
-        button.releasePointerCapture?.(e.pointerId);
-      } catch {}
-
+    button.addEventListener('pointerup', () => {
       if (pressTimer) {
         clearTimeout(pressTimer);
         pressTimer = null;
       }
-
-      if (isDragging) {
-        isDragging = false;
-        userCustomPos = {
-          x: parseFloat(host.style.left) || SAFE_LEFT,
-          y: parseFloat(host.style.top) || SAFE_TOP
-        };
-        try {
-          if (typeof localStorage !== 'undefined') {
-            localStorage.setItem('comic_floating_ball_pos', JSON.stringify(userCustomPos));
-          }
-        } catch {}
-        return; // 拖拽结束不触发点击启停
-      }
-
-      // 短按：如果菜单开着，短按关闭；如果菜单没开，短按直接启停翻译！
+      // 短按：如果菜单开着，短按关闭；如果菜单没开，短按直接启停翻译！(老版本灵魂)
       if (!isLongPress) {
         if (!menu.hasAttribute('hidden')) {
           closeMenu();
@@ -1365,15 +1289,11 @@
       }
     });
 
-    button.addEventListener('pointercancel', (e) => {
-      try {
-        button.releasePointerCapture?.(e.pointerId);
-      } catch {}
+    button.addEventListener('pointercancel', () => {
       if (pressTimer) {
         clearTimeout(pressTimer);
         pressTimer = null;
       }
-      isDragging = false;
     });
 
     // 悬停/触碰时临时恢复全不透明
@@ -1454,19 +1374,6 @@
     shadow.getElementById('btn-open-settings').addEventListener('click', () => {
       closeMenu();
       openModal();
-    });
-
-    // 悬浮球复位位置
-    shadow.getElementById('btn-reset-ball-pos')?.addEventListener('click', () => {
-      userCustomPos = null;
-      try {
-        if (typeof localStorage !== 'undefined') {
-          localStorage.removeItem('comic_floating_ball_pos');
-        }
-      } catch {}
-      closeMenu();
-      layout();
-      showToast('📍 悬浮球已复位至左上角安全区域');
     });
   }
 
@@ -2732,21 +2639,6 @@
     frame = 0;
     if (!reader?.firstImage || reader.firstImage.isConnected === false || reader.root?.isConnected === false) {
       if (host) setVisible(false);
-      return;
-    }
-
-    if (userCustomPos && typeof userCustomPos.x === 'number' && typeof userCustomPos.y === 'number') {
-      const winW = (typeof window !== 'undefined' ? window.innerWidth : 1200) || 1200;
-      const winH = (typeof window !== 'undefined' ? window.innerHeight : 800) || 800;
-      const minX = 8;
-      const maxX = Math.max(minX, winW - SIZE - 8);
-      const minY = 24;
-      const maxY = Math.max(minY, winH - SIZE - 24);
-      const clampedX = Math.max(minX, Math.min(maxX, userCustomPos.x));
-      const clampedY = Math.max(minY, Math.min(maxY, userCustomPos.y));
-      host.style.left = `${Math.round(clampedX)}px`;
-      host.style.top = `${Math.round(clampedY)}px`;
-      setVisible(true);
       return;
     }
 
